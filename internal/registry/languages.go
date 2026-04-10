@@ -395,17 +395,17 @@ var languageRegistry = map[string]Language{
 			Manager:        "direct",
 			DefaultVersion: "21",
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21+37/OpenJDK21U-jdk_{ARCH}_linux_hotspot_21_37.tar.gz && mkdir -p /opt/java/21 && tar -xzf OpenJDK21U-jdk_{ARCH}_linux_hotspot_21_37.tar.gz --strip-components=1 -C /opt/java/21 && rm *.tar.gz`},
-				{Kind: "env", Value: `PATH=/opt/java/21/bin:$PATH`},
+				{Kind: "run", Value: `curl -LO https://github.com/adoptium/temurin{VERSION}-binaries/releases/download/jdk-{VERSION}+37/OpenJDK{VERSION}U-jdk_{ARCH}_linux_hotspot_{VERSION}_37.tar.gz && mkdir -p /opt/java/{VERSION} && tar -xzf OpenJDK{VERSION}U-jdk_{ARCH}_linux_hotspot_{VERSION}_37.tar.gz --strip-components=1 -C /opt/java/{VERSION} && rm *.tar.gz`},
+				{Kind: "env", Value: `PATH=/opt/java/{VERSION}/bin:$PATH`},
 				{Kind: "run", Value: `curl -L "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf jdtls.tar.gz -C /opt/jdtls && rm jdtls.tar.gz`},
 			},
 			ContainerPaths: []ContainerPath{
-				{Container: "/opt/java/21/", InstallPath: "~/.ferry/runtimes/java-lsp-21/"},
+				{Container: "/opt/java/{VERSION}/", InstallPath: "~/.ferry/runtimes/java-lsp-{VERSION}/"},
 				{Container: "/opt/jdtls/", InstallPath: "~/.ferry/runtimes/jdtls/"},
 			},
 			ShellInit: []string{
-				`export PATH="$HOME/.ferry/runtimes/java-lsp-21/bin:$PATH"`,
-				`export JAVA_HOME="$HOME/.ferry/runtimes/java-lsp-21"`,
+				`export PATH="$HOME/.ferry/runtimes/java-lsp-{VERSION}/bin:$PATH"`,
+				`export JAVA_HOME="$HOME/.ferry/runtimes/java-lsp-{VERSION}"`,
 			},
 		},
 	},
@@ -444,8 +444,8 @@ var languageRegistry = map[string]Language{
 		LSP:               "clangd",
 		Formatters:        []string{"clang-format"},
 		Linters:           []string{"clang-tidy"},
-		ApproxSizeMB:      0, // shares LLVM runtime with c
-		ApproxLSPOnlyMB:   0,
+		ApproxSizeMB:    200, // shares LLVM runtime with "c"
+		ApproxLSPOnlyMB: 200,
 		MacOSSupported:    true,
 		Runtime:           nil, // shares with "c"
 	},
@@ -523,13 +523,17 @@ var languageRegistry = map[string]Language{
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `apt-get install -y software-properties-common 2>/dev/null || true && apt-get install -y php8.3 php8.3-cli php8.3-mbstring php8.3-xml php8.3-curl 2>/dev/null || true && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer`},
 				{Kind: "env", Value: `PATH=/usr/local/bin:$PATH`},
-				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && export NVM_DIR=/root/.nvm && . $NVM_DIR/nvm.sh && nvm install lts && npm install -g intelephense`},
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && export NVM_DIR=/root/.nvm && . $NVM_DIR/nvm.sh && nvm install lts && npm install --prefix /opt/intelephense intelephense`},
 			},
 			ContainerPaths: []ContainerPath{
 				{Container: "/usr/bin/", InstallPath: "~/.ferry/runtimes/php-{VERSION}/bin/"},
 				{Container: "/usr/local/bin/composer", InstallPath: "~/.ferry/runtimes/php-{VERSION}/bin/composer"},
+				{Container: "/opt/intelephense/", InstallPath: "~/.ferry/runtimes/php-lsp/"},
 			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/php-{VERSION}/bin:$PATH"`},
+			ShellInit: []string{
+				`export PATH="$HOME/.ferry/runtimes/php-{VERSION}/bin:$PATH"`,
+				`export PATH="$HOME/.ferry/runtimes/php-lsp/node_modules/.bin:$PATH"`,
+			},
 		},
 	},
 
@@ -793,14 +797,14 @@ var languageRegistry = map[string]Language{
 			Manager:        "system",
 			DefaultVersion: "3.9.1",
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/LuaLS/lua-language-server/releases/download/3.9.1/lua-language-server-3.9.1-linux-{ARCH}.tar.gz && mkdir -p /opt/lua-ls && tar -xzf lua-language-server-3.9.1-linux-{ARCH}.tar.gz -C /opt/lua-ls && rm *.tar.gz`},
+				{Kind: "run", Value: `curl -LO https://github.com/LuaLS/lua-language-server/releases/download/{VERSION}/lua-language-server-{VERSION}-linux-{ARCH}.tar.gz && mkdir -p /opt/lua-ls && tar -xzf lua-language-server-{VERSION}-linux-{ARCH}.tar.gz -C /opt/lua-ls && rm *.tar.gz`},
 			},
 			ContainerPaths: []ContainerPath{
 				{Container: "/opt/lua-ls/", InstallPath: "~/.ferry/runtimes/lua-ls/"},
 			},
 			MacOSDownloads: []MacOSDownload{
-				{URL: "https://github.com/LuaLS/lua-language-server/releases/download/3.9.1/lua-language-server-3.9.1-darwin-{ARCH}.tar.gz", Arch: "x86_64", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/lua-ls/"},
-				{URL: "https://github.com/LuaLS/lua-language-server/releases/download/3.9.1/lua-language-server-3.9.1-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/lua-ls/"},
+				{URL: "https://github.com/LuaLS/lua-language-server/releases/download/{VERSION}/lua-language-server-{VERSION}-darwin-{ARCH}.tar.gz", Arch: "x86_64", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/lua-ls/"},
+				{URL: "https://github.com/LuaLS/lua-language-server/releases/download/{VERSION}/lua-language-server-{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/lua-ls/"},
 			},
 			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/lua-ls/bin:$PATH"`},
 		},
