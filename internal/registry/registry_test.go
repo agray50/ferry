@@ -206,3 +206,44 @@ func TestJSTSSharedRuntime(t *testing.T) {
 		t.Error("javascript and typescript should share the same Manager (nvm)")
 	}
 }
+
+func TestAllLanguagesHaveRequiredFields(t *testing.T) {
+	languages := []string{
+		"python", "javascript", "typescript", "go", "rust",
+		"ruby", "java", "c", "cpp", "csharp", "php",
+		"kotlin", "scala", "swift", "zig", "elixir", "dart", "r",
+		"lua", "bash", "sh",
+		"yaml", "json", "markdown", "dockerfile",
+	}
+	for _, name := range languages {
+		t.Run(name, func(t *testing.T) {
+			l, err := Get(name)
+			if err != nil {
+				t.Fatalf("Get(%q): %v", name, err)
+			}
+			if l.LSP == "" {
+				t.Errorf("%s: LSP should not be empty", name)
+			}
+			// Languages with a runtime must have BuildSteps and ContainerPaths
+			if l.Runtime != nil {
+				if len(l.Runtime.BuildSteps) == 0 {
+					t.Errorf("%s: Runtime.BuildSteps should not be empty", name)
+				}
+				if len(l.Runtime.ContainerPaths) == 0 {
+					t.Errorf("%s: Runtime.ContainerPaths should not be empty", name)
+				}
+				if len(l.Runtime.ShellInit) == 0 {
+					t.Errorf("%s: Runtime.ShellInit should not be empty", name)
+				}
+			}
+		})
+	}
+}
+
+func TestAllLanguagesHaveSizeEstimates(t *testing.T) {
+	for _, l := range All() {
+		if l.Runtime != nil && l.ApproxSizeMB == 0 {
+			t.Errorf("%s has Runtime but zero ApproxSizeMB", l.Name)
+		}
+	}
+}
