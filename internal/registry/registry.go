@@ -7,23 +7,84 @@ import (
 	"github.com/anthropics/ferry/internal/config"
 )
 
-// Language describes a language's full toolchain.
+// BuildStep is a single instruction in a Docker build sequence.
+// Kind "run" emits a RUN instruction; kind "env" emits an ENV instruction.
+type BuildStep struct {
+	Kind  string // "run" | "env"
+	Value string // shell command for "run"; "KEY=VALUE" for "env"
+}
+
+// ContainerPath maps a path inside a Linux Docker container to a target install path.
+// {VERSION} is substituted with the resolved runtime version at bundle time.
+// {ARCH} is substituted with the build track arch (x86_64 or arm64).
+type ContainerPath struct {
+	Container   string // e.g. /root/.pyenv/versions/{VERSION}/
+	InstallPath string // e.g. ~/.ferry/runtimes/python-{VERSION}/
+}
+
+// MacOSDownload describes a direct binary download for darwin build tracks.
+// {VERSION} and {ARCH} are substituted at bundle time.
+type MacOSDownload struct {
+	URL         string // direct download URL template
+	Arch        string // "x86_64" | "arm64" | "universal"
+	ArchiveRoot string // subdirectory within the downloaded archive; "" = root
+	InstallPath string // e.g. ~/.ferry/runtimes/go-{VERSION}/
+}
+
+// AlternateLSP is an alternative language server for a language.
+// Its BuildSteps replace the default LSPBuildSteps when selected.
+type AlternateLSP struct {
+	Name       string
+	BuildSteps []BuildStep
+}
+
+// Runtime describes how a language runtime is installed, extracted, and activated.
+// Version managers (pyenv, nvm, etc.) are Docker build tools only — they are
+// never shipped to the target. ContainerPaths point at the versioned output
+// of the version manager, not the manager itself.
+type Runtime struct {
+	Manager           string   // pyenv | nvm | rustup | rbenv | sdkman | direct | system
+	DefaultVersion    string   // used when no version override is specified
+	AvailableVersions []string // shown in TUI version picker
+	PackageManager    string   // pip | npm | cargo | gem | go
+	ExtraPackages     []string // installed via PackageManager after runtime
+
+	// Linux Docker build sequence: alternating RUN and ENV instructions.
+	// {VERSION} and {ARCH} are substituted at bundle time.
+	BuildSteps []BuildStep
+
+	// Paths to extract from the Linux container after build.
+	// These point at the versioned runtime directory, not the version manager.
+	// {VERSION} and {ARCH} substituted at bundle time.
+	ContainerPaths []ContainerPath
+
+	// Direct download specs for darwin/macOS build tracks (no Docker).
+	// {VERSION} and {ARCH} substituted at bundle time.
+	MacOSDownloads []MacOSDownload
+
+	// Lines appended to ~/.zshrc on the target after installation.
+	// Point directly at ~/.ferry/runtimes/{lang}-{version}/bin.
+	// {VERSION} substituted at install-script generation time.
+	ShellInit []string
+
+	// Docker steps to install the default LSP inside the container.
+	// Executed after BuildSteps so the runtime is available.
+	LSPBuildSteps []BuildStep
+}
+
+// Language describes a language's full toolchain configuration.
 type Language struct {
 	Name              string
 	TreesitterParsers []string
 	LSP               string
-	AlternateLSPs     []string
+	AlternateLSPs     []AlternateLSP
 	Formatters        []string
 	Linters           []string
-	Runtime           *Runtime
-}
-
-// Runtime describes a version manager and package manager for a language.
-type Runtime struct {
-	Manager        string   // pyenv | nvm | goenv | none
-	DefaultVersion string   // "3.12" | "lts" | "stable"
-	PackageManager string   // pip | npm | go get
-	ExtraPackages  []string // additional packages to install at bundle time
+	Runtime           *Runtime // nil = no runtime needed (yaml, json, markdown, dockerfile)
+	LSPOnlyRuntime    *Runtime // lighter path: installs LSP binary only, no full toolchain
+	ApproxSizeMB      int      // estimated compressed size of full runtime, for TUI
+	ApproxLSPOnlyMB   int      // estimated compressed size of LSP-only tier
+	MacOSSupported    bool     // false = darwin tracks produce no component for this language
 }
 
 var registry = map[string]Language{
@@ -38,7 +99,7 @@ var registry = map[string]Language{
 		Name:              "python",
 		TreesitterParsers: []string{"python"},
 		LSP:               "pyright",
-		AlternateLSPs:     []string{"pylsp"},
+		AlternateLSPs:     []AlternateLSP{{Name: "pylsp"}},
 		Formatters:        []string{"black", "isort"},
 		Linters:           []string{"flake8", "mypy"},
 		Runtime:           &Runtime{Manager: "pyenv", DefaultVersion: "3.12", PackageManager: "pip"},
@@ -166,7 +227,7 @@ func IsValidLSP(language, lsp string) bool {
 		return true
 	}
 	for _, alt := range l.AlternateLSPs {
-		if alt == lsp {
+		if alt.Name == lsp {
 			return true
 		}
 	}
@@ -204,3 +265,4 @@ func ResolveLanguages(enabled []string, overrides map[string]config.LanguageOver
 	}
 	return out, nil
 }
+

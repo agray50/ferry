@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/anthropics/ferry/internal/config"
@@ -93,5 +94,29 @@ func TestResolveLanguagesInvalidLSP(t *testing.T) {
 		})
 	if err == nil {
 		t.Fatal("expected error for invalid LSP override")
+	}
+}
+
+func TestBuildStepKinds(t *testing.T) {
+	run := BuildStep{Kind: "run", Value: "echo hello"}
+	env := BuildStep{Kind: "env", Value: "PATH=/usr/bin:$PATH"}
+	if run.Kind != "run" {
+		t.Errorf("run.Kind = %q, want run", run.Kind)
+	}
+	if env.Kind != "env" {
+		t.Errorf("env.Kind = %q, want env", env.Kind)
+	}
+}
+
+func TestContainerPathFields(t *testing.T) {
+	cp := ContainerPath{
+		Container:   "/root/.pyenv/versions/{VERSION}/",
+		InstallPath: "~/.ferry/runtimes/python-{VERSION}/",
+	}
+	if !strings.Contains(cp.Container, "{VERSION}") {
+		t.Error("ContainerPath.Container should contain {VERSION} placeholder")
+	}
+	if !strings.Contains(cp.InstallPath, "{VERSION}") {
+		t.Error("ContainerPath.InstallPath should contain {VERSION} placeholder")
 	}
 }
