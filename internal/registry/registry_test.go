@@ -120,3 +120,89 @@ func TestContainerPathFields(t *testing.T) {
 		t.Error("ContainerPath.InstallPath should contain {VERSION} placeholder")
 	}
 }
+
+func TestPythonBuildSteps(t *testing.T) {
+	l, err := Get("python")
+	if err != nil {
+		t.Fatalf("Get(python): %v", err)
+	}
+	if l.Runtime == nil {
+		t.Fatal("python Runtime should not be nil")
+	}
+	if len(l.Runtime.BuildSteps) == 0 {
+		t.Error("python Runtime.BuildSteps should not be empty")
+	}
+	hasRun, hasEnv := false, false
+	for _, s := range l.Runtime.BuildSteps {
+		if s.Kind == "run" { hasRun = true }
+		if s.Kind == "env" { hasEnv = true }
+	}
+	if !hasRun {
+		t.Error("python BuildSteps should contain at least one 'run' step")
+	}
+	if !hasEnv {
+		t.Error("python BuildSteps should contain at least one 'env' step")
+	}
+}
+
+func TestPythonContainerPaths(t *testing.T) {
+	l, _ := Get("python")
+	if len(l.Runtime.ContainerPaths) == 0 {
+		t.Fatal("python Runtime.ContainerPaths should not be empty")
+	}
+	cp := l.Runtime.ContainerPaths[0]
+	if !strings.Contains(cp.Container, "{VERSION}") {
+		t.Errorf("Container path %q should contain {VERSION}", cp.Container)
+	}
+	if !strings.Contains(cp.InstallPath, "~/.ferry/runtimes/") {
+		t.Errorf("InstallPath %q should be under ~/.ferry/runtimes/", cp.InstallPath)
+	}
+}
+
+func TestPythonShellInit(t *testing.T) {
+	l, _ := Get("python")
+	if len(l.Runtime.ShellInit) == 0 {
+		t.Fatal("python Runtime.ShellInit should not be empty")
+	}
+	if !strings.Contains(l.Runtime.ShellInit[0], ".ferry/runtimes/") {
+		t.Errorf("ShellInit %q should reference ~/.ferry/runtimes/", l.Runtime.ShellInit[0])
+	}
+}
+
+func TestPythonApproxSize(t *testing.T) {
+	l, _ := Get("python")
+	if l.ApproxSizeMB <= 0 {
+		t.Error("python ApproxSizeMB should be > 0")
+	}
+	if l.ApproxLSPOnlyMB <= 0 {
+		t.Error("python ApproxLSPOnlyMB should be > 0")
+	}
+	if l.ApproxLSPOnlyMB >= l.ApproxSizeMB {
+		t.Error("python LSP-only tier should be smaller than full runtime")
+	}
+}
+
+func TestMacOSSupported(t *testing.T) {
+	python, _ := Get("python")
+	if !python.MacOSSupported {
+		t.Error("python should be MacOSSupported")
+	}
+}
+
+func TestJSTSSharedRuntime(t *testing.T) {
+	js, _ := Get("javascript")
+	ts, _ := Get("typescript")
+	if js.Runtime == nil {
+		t.Fatal("javascript must have a Runtime")
+	}
+	if js.Runtime.Manager != "nvm" {
+		t.Errorf("javascript runtime manager should be nvm, got %s", js.Runtime.Manager)
+	}
+	// typescript shares the nvm runtime — its Runtime field must also be non-nil
+	if ts.Runtime == nil {
+		t.Fatal("typescript must have a Runtime (shares nvm with javascript)")
+	}
+	if ts.Runtime.Manager != js.Runtime.Manager {
+		t.Error("javascript and typescript should share the same Manager (nvm)")
+	}
+}
