@@ -7,7 +7,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/ferry/internal/config"
-	"github.com/anthropics/ferry/internal/tui"
 )
 
 var initCmd = &cobra.Command{
@@ -35,20 +34,8 @@ func runInit(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	result, err := tui.RunInitWizard(existing)
-	if err != nil {
-		return err
-	}
-	if result.Aborted {
-		fmt.Println("  aborted — ferry.lock not written")
-		return nil
-	}
-
-	if err := config.WriteLockFile(result.LockFile); err != nil {
-		return err
-	}
-
-	fmt.Println("✓ wrote ferry.lock")
-	fmt.Println("  run ferry bundle --arch all to build bundles")
+	// TODO(Task 6): rewrite to use tui.RunPresetPicker + tui.RunProfileWizard
+	_ = existing
+	fmt.Println("  ferry init: use 'ferry init' after Task 6 rewrites cmd/init.go")
 	return nil
 }
