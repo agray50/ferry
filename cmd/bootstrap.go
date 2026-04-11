@@ -167,7 +167,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	// Generate and upload install.sh
-	script, err := bootstrap.GenerateInstallScript(manifest, lock)
+	script, err := bootstrap.GenerateInstallScript(manifest, lock, nil)
 	if err != nil {
 		return err
 	}

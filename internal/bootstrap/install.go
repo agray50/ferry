@@ -5,13 +5,14 @@ import (
 	"strings"
 
 	"github.com/anthropics/ferry/internal/config"
+	"github.com/anthropics/ferry/internal/registry"
 	"github.com/anthropics/ferry/internal/store"
 )
 
-// GenerateInstallScript generates a POSIX sh install.sh for the given manifest and lock.
-// The age private key (if needed) is read from the first line of stdin — it is never
-// written to disk on the target.
-func GenerateInstallScript(m *store.Manifest, lock *config.LockFile) (string, error) {
+// GenerateInstallScript generates a POSIX sh install.sh for the given manifest.
+// langs carries the ShellInit lines for each bundled runtime.
+// Version managers are never referenced — PATH points directly at ~/.ferry/runtimes/.
+func GenerateInstallScript(m *store.Manifest, lock *config.LockFile, langs []registry.ResolvedLanguage) (string, error) {
 	var b strings.Builder
 
 	b.WriteString(`#!/bin/sh
@@ -34,7 +35,6 @@ extract_component() {
   local hash="$1"
   local dest="$2"
   local src="$STORE_DIR/${hash}.tar.zst"
-  # Remove existing content so stale files from old versions don't survive.
   rm -rf "${dest:?}"
   mkdir -p "$dest"
   tar --zstd -xf "$src" -C "$dest"
@@ -42,7 +42,7 @@ extract_component() {
 
 `)
 
-	// Determine if any components are encrypted.
+	// Encrypted component handling
 	hasEncrypted := false
 	for _, c := range m.Components {
 		if c.Encrypted {
@@ -51,11 +51,7 @@ extract_component() {
 		}
 	}
 
-	// Always read one line from stdin. When encrypted components are present
-	// that line is the age private key (delivered securely over the SSH
-	// connection, never stored to disk). When there are no encrypted
-	// components the caller sends a blank line so this read does not block.
-	b.WriteString(`# Read age key from stdin (delivered via SSH, never written to disk).
+	b.WriteString(`# Read age key from stdin (blank line sent when no encrypted components).
 IFS= read -r FERRY_AGE_KEY || true
 
 `)
@@ -71,21 +67,13 @@ IFS= read -r FERRY_AGE_KEY || true
 `)
 	}
 
-	// Inject PATH.
-	b.WriteString(`# Ensure ~/.local/bin is in PATH.
-grep -q '\.local/bin' "$HOME/.zshrc" 2>/dev/null || \
-  printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$HOME/.zshrc" || true
-
-`)
-
-	// Extract each component.
+	// Extract each component
 	for _, c := range m.Components {
 		b.WriteString(fmt.Sprintf("# %s\n", c.ID))
 		installPath := expandHome(c.InstallPath)
 		b.WriteString(fmt.Sprintf("backup_if_exists %q\n", installPath))
 		if c.Encrypted {
-			b.WriteString(fmt.Sprintf("decrypt_component \"$STORE_DIR/%s.tar.zst.age\" \"$STORE_DIR/%s.tar.zst\"\n",
-				c.Hash, c.Hash))
+			b.WriteString(fmt.Sprintf("decrypt_component \"$STORE_DIR/%s.tar.zst.age\" \"$STORE_DIR/%s.tar.zst\"\n", c.Hash, c.Hash))
 		}
 		b.WriteString(fmt.Sprintf("extract_component %q %q\n", c.Hash, installPath))
 		if c.BinSymlink != "" {
@@ -95,22 +83,48 @@ grep -q '\.local/bin' "$HOME/.zshrc" 2>/dev/null || \
 		b.WriteString("\n")
 	}
 
-	// Set permissions.
-	b.WriteString(`# Set permissions.
-chmod +x "$BIN_DIR"/* 2>/dev/null || true
-chmod -R +x "$HOME/.local/share/nvim/mason/bin/" 2>/dev/null || true
+	// Shell PATH init — one idempotent block per runtime.
+	// Points at ~/.ferry/runtimes/; no version manager setup.
+	if len(langs) > 0 {
+		b.WriteString(`# Runtime PATH setup.
+# Each line is guarded by grep -q to prevent duplication on re-install.
+`)
+		shellrc := `"$HOME/.zshrc"`
+		b.WriteString(fmt.Sprintf("SHELL_RC=%s\n", shellrc))
+		b.WriteString(`[ -f "$HOME/.bashrc" ] && SHELL_RC="$HOME/.bashrc"
+[ -n "$SHELL" ] && echo "$SHELL" | grep -q zsh && SHELL_RC="$HOME/.zshrc"
 
 `)
+		for _, rl := range langs {
+			if rl.Runtime == nil || len(rl.Runtime.ShellInit) == 0 {
+				continue
+			}
+			b.WriteString(fmt.Sprintf("# %s\n", rl.Language.Name))
+			for _, line := range rl.Runtime.ShellInit {
+				key := line
+				if idx := strings.Index(line, ".ferry/runtimes/"); idx >= 0 {
+					end := strings.Index(line[idx+16:], "/")
+					if end > 0 {
+						key = line[idx : idx+16+end]
+					}
+				}
+				b.WriteString(fmt.Sprintf("grep -q %q \"$SHELL_RC\" 2>/dev/null || printf '\\n%s\\n' >> \"$SHELL_RC\"\n",
+					key, line))
+			}
+			b.WriteString("\n")
+		}
+	}
 
-	// Write manifest.
-	b.WriteString(`# Write manifest.
+	b.WriteString(`# Set permissions.
+chmod +x "$BIN_DIR"/* 2>/dev/null || true
+chmod -R +x "$HOME/.ferry/runtimes/"*/bin/ 2>/dev/null || true
+
+# Write manifest.
 cp "$FERRY_DIR/incoming/manifest.json" "$FERRY_DIR/manifest.json" 2>/dev/null || true
 
 `)
 
-	// Clear age key from memory.
 	b.WriteString("unset FERRY_AGE_KEY\n\n")
-
 	b.WriteString(`echo "ferry: install complete"
 `)
 
