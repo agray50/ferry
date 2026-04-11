@@ -35,12 +35,11 @@ func BuildAll(opts BuildOptions, progress func(state []BuildState)) ([]BuildResu
 		return nil, err
 	}
 
-	// TODO: rewrite in Phase 3 to resolve per-profile languages
 	var profileLangs []config.LanguageConfig
 	if prof, ok := opts.Lock.Profiles[opts.Profile]; ok {
 		profileLangs = prof.Languages
 	}
-	langs, err := registry.ResolveLanguages(profileLangs)
+	langs, err := registry.ResolveFromProfile(profileLangs)
 	if err != nil {
 		return nil, err
 	}
@@ -89,7 +88,7 @@ func BuildAll(opts BuildOptions, progress func(state []BuildState)) ([]BuildResu
 	return results, nil
 }
 
-func buildTrack(track BuildTrack, opts BuildOptions, langs []registry.Language, lockHash string) BuildResult {
+func buildTrack(track BuildTrack, opts BuildOptions, langs []registry.ResolvedLanguage, lockHash string) BuildResult {
 	r := BuildResult{Track: track}
 
 	// check if already built
