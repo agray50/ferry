@@ -86,10 +86,8 @@ func (m langListModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.items[m.cursor].selected {
 			m.configurator = newLangConfiguratorModel(m.items[m.cursor].lang, m.items[m.cursor].cfg)
 			m.mode = langModeConfig
-		} else {
-			m.done = true
-			return m, tea.Quit
 		}
+		// do nothing on unselected - use q to finish
 	case "q":
 		m.done = true
 		return m, tea.Quit
@@ -141,7 +139,7 @@ func (m langListModel) View() string {
 		}
 		b.WriteString(fmt.Sprintf("%s%s %s%s%s\n", cursor, checkbox, item.lang.Name, tierLabel, configHint))
 	}
-	b.WriteString(subtleStyle.Render("\n  space: toggle   enter: configure/done   ↑↓: navigate   ctrl+c: abort\n"))
+	b.WriteString(subtleStyle.Render("\n  space: toggle   enter: configure   q: done   ↑↓: navigate   ctrl+c: abort\n"))
 	return b.String()
 }
 
@@ -277,11 +275,11 @@ func (m langConfiguratorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.field++
 		}
 	case "left", "h":
-		m.adjustFieldLeft()
+		m = m.adjustFieldLeft()
 	case "right", "l":
-		m.adjustFieldRight()
+		m = m.adjustFieldRight()
 	case " ":
-		m.toggleField()
+		m = m.toggleField()
 	case "backspace":
 		if m.field == cfgFieldPackages && len(m.pkgInput) > 0 {
 			m.pkgInput = m.pkgInput[:len(m.pkgInput)-1]
@@ -294,7 +292,7 @@ func (m langConfiguratorModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-func (m *langConfiguratorModel) adjustFieldLeft() {
+func (m langConfiguratorModel) adjustFieldLeft() langConfiguratorModel {
 	switch m.field {
 	case cfgFieldTier:
 		if m.tierIdx > 0 {
@@ -309,9 +307,10 @@ func (m *langConfiguratorModel) adjustFieldLeft() {
 			m.lspIdx--
 		}
 	}
+	return m
 }
 
-func (m *langConfiguratorModel) adjustFieldRight() {
+func (m langConfiguratorModel) adjustFieldRight() langConfiguratorModel {
 	switch m.field {
 	case cfgFieldTier:
 		if m.tierIdx < 1 {
@@ -326,9 +325,10 @@ func (m *langConfiguratorModel) adjustFieldRight() {
 			m.lspIdx++
 		}
 	}
+	return m
 }
 
-func (m *langConfiguratorModel) toggleField() {
+func (m langConfiguratorModel) toggleField() langConfiguratorModel {
 	switch m.field {
 	case cfgFieldFormatters:
 		allOn := true
@@ -353,11 +353,16 @@ func (m *langConfiguratorModel) toggleField() {
 			m.lintSel[i] = !allOn
 		}
 	}
+	return m
 }
 
 func (m langConfiguratorModel) View() string {
 	var b strings.Builder
 	b.WriteString(titleStyle.Render(fmt.Sprintf("Configure: %s", m.lang.Name)) + "\n\n")
+	pkgDisplay := m.pkgInput
+	if m.field == cfgFieldPackages {
+		pkgDisplay += "_"
+	}
 	fields := []struct {
 		label   string
 		field   cfgField
@@ -368,7 +373,7 @@ func (m langConfiguratorModel) View() string {
 		{"LSP     ", cfgFieldLSP, m.renderLSP()},
 		{"Formats ", cfgFieldFormatters, m.renderFormatters()},
 		{"Linters ", cfgFieldLinters, m.renderLinters()},
-		{"Packages", cfgFieldPackages, m.pkgInput + "_"},
+		{"Packages", cfgFieldPackages, pkgDisplay},
 	}
 	for _, f := range fields {
 		prefix := "  "

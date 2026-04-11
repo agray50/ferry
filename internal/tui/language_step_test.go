@@ -90,3 +90,55 @@ func TestLangListModel_collectConfigs(t *testing.T) {
 		t.Errorf("want go, got %s", cfgs[0].Name)
 	}
 }
+
+func TestLangConfiguratorModel_result(t *testing.T) {
+	lang := registry.Language{
+		Name:         "python",
+		ApproxSizeMB: 150,
+		Formatters:   []string{"black", "isort"},
+		Linters:      []string{"flake8"},
+		Runtime: &registry.Runtime{
+			AvailableVersions: []string{"3.11", "3.12"},
+		},
+	}
+	m := newLangConfiguratorModel(lang, config.LanguageConfig{Name: "python", Tier: "full"})
+	m.tierIdx = 1 // lsp-only
+	m.versionIdx = 1 // 3.12
+	m.fmtSel = []bool{true, false} // only black
+	m.pkgInput = "requests httpx"
+
+	result := m.result()
+	if result.Tier != "lsp-only" {
+		t.Errorf("want tier lsp-only, got %s", result.Tier)
+	}
+	if result.RuntimeVersion != "3.12" {
+		t.Errorf("want version 3.12, got %s", result.RuntimeVersion)
+	}
+	if len(result.Formatters) != 1 || result.Formatters[0] != "black" {
+		t.Errorf("want [black], got %v", result.Formatters)
+	}
+	if len(result.ExtraPackages) != 2 {
+		t.Errorf("want 2 extra packages, got %d", len(result.ExtraPackages))
+	}
+}
+
+func TestNewLangListModel_prePopulatesExisting(t *testing.T) {
+	langs := []registry.Language{
+		{Name: "go", ApproxSizeMB: 130},
+		{Name: "python", ApproxSizeMB: 150},
+	}
+	existing := []config.LanguageConfig{
+		{Name: "go", Tier: "lsp-only"},
+	}
+	m := newLangListModel(langs, existing)
+
+	if !m.items[0].selected {
+		t.Error("go should be pre-selected from existing")
+	}
+	if m.items[0].cfg.Tier != "lsp-only" {
+		t.Errorf("go tier should be lsp-only, got %s", m.items[0].cfg.Tier)
+	}
+	if m.items[1].selected {
+		t.Error("python should not be selected (not in existing)")
+	}
+}
