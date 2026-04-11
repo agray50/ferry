@@ -244,3 +244,67 @@ func TestAllLanguagesHaveSizeEstimates(t *testing.T) {
 		}
 	}
 }
+
+func TestResolveFromProfile(t *testing.T) {
+	langs := []config.LanguageConfig{
+		{Name: "python", Tier: "full", RuntimeVersion: "3.11", LSP: "pylsp"},
+		{Name: "go", Tier: "lsp-only"},
+	}
+
+	resolved, err := ResolveFromProfile(langs)
+	if err != nil {
+		t.Fatalf("ResolveFromProfile: %v", err)
+	}
+	if len(resolved) != 2 {
+		t.Fatalf("expected 2 resolved languages, got %d", len(resolved))
+	}
+
+	// Python: full tier, pylsp override
+	py := resolved[0]
+	if py.Language.Name != "python" {
+		t.Errorf("resolved[0].Name = %q, want python", py.Language.Name)
+	}
+	if py.Runtime == nil {
+		t.Fatal("python full tier: Runtime should not be nil")
+	}
+	if py.Runtime.DefaultVersion != "3.11" {
+		t.Errorf("python runtime version = %q, want 3.11", py.Runtime.DefaultVersion)
+	}
+	if py.EffectiveLSP != "pylsp" {
+		t.Errorf("python EffectiveLSP = %q, want pylsp", py.EffectiveLSP)
+	}
+
+	// Go: lsp-only tier
+	go_ := resolved[1]
+	if go_.Runtime != go_.Language.LSPOnlyRuntime {
+		t.Error("go lsp-only: Runtime should be LSPOnlyRuntime")
+	}
+}
+
+func TestResolveFromProfileUnknownLanguage(t *testing.T) {
+	_, err := ResolveFromProfile([]config.LanguageConfig{{Name: "cobol", Tier: "full"}})
+	if err == nil {
+		t.Fatal("expected error for unknown language")
+	}
+}
+
+func TestResolveFromProfileDeduplicatesNVM(t *testing.T) {
+	langs := []config.LanguageConfig{
+		{Name: "javascript", Tier: "full"},
+		{Name: "typescript", Tier: "full"},
+	}
+	resolved, err := ResolveFromProfile(langs)
+	if err != nil {
+		t.Fatalf("ResolveFromProfile: %v", err)
+	}
+	// Both resolved but typescript has nil Runtime (shares nvm with javascript)
+	var runtimeCount int
+	for _, r := range resolved {
+		if r.Runtime != nil {
+			runtimeCount++
+		}
+	}
+	if runtimeCount != 1 {
+		t.Errorf("js+ts should produce 1 runtime component, got %d", runtimeCount)
+	}
+}

@@ -142,6 +142,72 @@ func IsValidLSP(language, lsp string) bool {
 	return false
 }
 
+// ResolvedLanguage is a language with its effective runtime and LSP selected
+// based on the LanguageConfig from ferry.lock.
+type ResolvedLanguage struct {
+	Language     Language
+	Runtime      *Runtime // nil if language has no runtime or tier is lsp-only with nil LSPOnlyRuntime
+	EffectiveLSP string
+	Config       config.LanguageConfig
+}
+
+// ResolveFromProfile resolves a list of LanguageConfigs from a profile into
+// ResolvedLanguages with the correct runtime tier and LSP applied.
+// Returns error if any language name is unknown or LSP override is invalid.
+func ResolveFromProfile(langs []config.LanguageConfig) ([]ResolvedLanguage, error) {
+	seen := map[string]bool{} // manager → already have runtime component
+	var out []ResolvedLanguage
+
+	for _, lc := range langs {
+		l, err := Get(lc.Name)
+		if err != nil {
+			return nil, err
+		}
+
+		// Validate LSP override
+		lsp := lc.LSP
+		if lsp == "" {
+			lsp = l.LSP
+		} else if !IsValidLSP(lc.Name, lsp) {
+			return nil, fmt.Errorf("invalid LSP %q for language %q", lsp, lc.Name)
+		}
+
+		// Select runtime tier
+		var rt *Runtime
+		switch lc.Tier {
+		case "lsp-only":
+			rt = l.LSPOnlyRuntime
+		default: // "full" or empty
+			rt = l.Runtime
+		}
+
+		// Deduplicate by runtime manager: if two languages share a manager (e.g.
+		// javascript and typescript both use nvm), only the first gets a runtime.
+		if rt != nil && rt.Manager != "" && rt.Manager != "system" && rt.Manager != "none" {
+			if seen[rt.Manager] {
+				rt = nil // subsequent language with same manager gets no runtime component
+			} else {
+				seen[rt.Manager] = true
+			}
+		}
+
+		// Apply version override
+		if rt != nil && lc.RuntimeVersion != "" {
+			copy := *rt
+			copy.DefaultVersion = lc.RuntimeVersion
+			rt = &copy
+		}
+
+		out = append(out, ResolvedLanguage{
+			Language:     l,
+			Runtime:      rt,
+			EffectiveLSP: lsp,
+			Config:       lc,
+		})
+	}
+	return out, nil
+}
+
 // ResolveLanguages resolves a list of LanguageConfig entries against the registry.
 // TODO: rewrite in Phase 3 to fully handle Tier, Formatters, Linters fields.
 func ResolveLanguages(langs []config.LanguageConfig) ([]Language, error) {
