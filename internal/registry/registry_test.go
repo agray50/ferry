@@ -308,3 +308,31 @@ func TestResolveFromProfileDeduplicatesNVM(t *testing.T) {
 		t.Errorf("js+ts should produce 1 runtime component, got %d", runtimeCount)
 	}
 }
+
+func TestPresetsNonEmpty(t *testing.T) {
+	presets := Presets()
+	if len(presets) == 0 {
+		t.Fatal("Presets() should return at least one preset")
+	}
+	for _, p := range presets {
+		if p.Name == "" {
+			t.Error("preset Name should not be empty")
+		}
+		if p.Description == "" {
+			t.Errorf("preset %q: Description should not be empty", p.Name)
+		}
+		if p.EstimatedMB <= 0 {
+			t.Errorf("preset %q: EstimatedMB should be > 0", p.Name)
+		}
+	}
+}
+
+func TestPresetsLanguagesAreValid(t *testing.T) {
+	for _, p := range Presets() {
+		for _, lc := range p.Profile.Languages {
+			if _, err := Get(lc.Name); err != nil {
+				t.Errorf("preset %q: unknown language %q", p.Name, lc.Name)
+			}
+		}
+	}
+}
