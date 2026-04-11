@@ -53,20 +53,16 @@ func TestLanguageConfigRoundTrip(t *testing.T) {
 	}
 }
 
-func TestDefaultLockFileHasNoGlobalLanguages(t *testing.T) {
+func TestDefaultLockFileProfiles(t *testing.T) {
 	lf := DefaultLockFile()
-	// All profiles start with empty language list; wizard populates them
-	for _, prof := range lf.Profiles {
-		_ = prof
+	if len(lf.Profiles) == 0 {
+		t.Fatal("DefaultLockFile should have at least one profile")
 	}
-}
-
-func TestLockFileNoGlobalCLI(t *testing.T) {
-	lf := DefaultLockFile()
-	// CLI is now per-profile, not at top level
-	for _, prof := range lf.Profiles {
-		if prof.CLI == nil {
-			// CLI field exists and can be nil (no tools selected)
-		}
+	def, ok := lf.Profiles["default"]
+	if !ok {
+		t.Fatal("DefaultLockFile should have a 'default' profile")
+	}
+	if def.Languages == nil {
+		t.Error("default profile Languages should be non-nil (empty slice, not nil)")
 	}
 }

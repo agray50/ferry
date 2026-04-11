@@ -164,7 +164,7 @@ func ResolveLanguages(langs []config.LanguageConfig) ([]Language, error) {
 				rt.DefaultVersion = lc.RuntimeVersion
 			}
 			if len(lc.ExtraPackages) > 0 {
-				rt.ExtraPackages = append(rt.ExtraPackages, lc.ExtraPackages...)
+				rt.ExtraPackages = append(append([]string{}, rt.ExtraPackages...), lc.ExtraPackages...)
 			}
 			l.Runtime = &rt
 		}
