@@ -79,9 +79,7 @@ func BuildMacOSComponent(lang registry.ResolvedLanguage, track BuildTrack, s *st
 
 // substituteDownloadURL substitutes {VERSION} and {ARCH} in a URL or path template.
 func substituteDownloadURL(s, version, arch string) string {
-	s = strings.ReplaceAll(s, "{VERSION}", version)
-	s = strings.ReplaceAll(s, "{ARCH}", arch)
-	return s
+	return substituteVars(s, version, arch)
 }
 
 // selectMacOSDownload picks the best MacOSDownload for the given arch.
