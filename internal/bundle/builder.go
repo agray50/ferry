@@ -172,7 +172,7 @@ func buildTrack(track BuildTrack, opts BuildOptions, langs []registry.ResolvedLa
 	defer RemoveContainer(containerID)
 
 	// extract components
-	components, err := ExtractComponents(containerID, track, opts.Lock, opts.Profile)
+	components, err := ExtractComponents(containerID, track, opts.Lock, opts.Profile, langs)
 	if err != nil {
 		r.Error = err
 		return r

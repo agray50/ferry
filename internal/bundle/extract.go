@@ -9,12 +9,13 @@ import (
 	"time"
 
 	"github.com/anthropics/ferry/internal/config"
+	"github.com/anthropics/ferry/internal/registry"
 	"github.com/anthropics/ferry/internal/store"
 )
 
 // ExtractComponents copies component directories from a running container,
 // hashes them, compresses them, and stores them in the component store.
-func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFile, profile string) ([]store.Component, error) {
+func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFile, profile string, langs []registry.ResolvedLanguage) ([]store.Component, error) {
 	s, err := store.NewStore()
 	if err != nil {
 		return nil, err
@@ -25,11 +26,12 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 		containerPath string
 		installPath   string
 		binSymlink    string
+		version       string
 	}
 
 	var specs []componentSpec
 
-	// nvim binary
+	// nvim binary (always present)
 	specs = append(specs, componentSpec{
 		id:            "nvim-binary",
 		containerPath: "/opt/nvim/",
@@ -37,7 +39,7 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 		binSymlink:    "~/.local/bin/nvim",
 	})
 
-	// lazy plugins — use the named profile, not a random map iteration
+	// lazy plugins for the named profile
 	if prof, ok := lock.Profiles[profile]; ok {
 		for _, plugin := range prof.Plugins {
 			specs = append(specs, componentSpec{
@@ -55,20 +57,43 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 		installPath:   "~/.local/share/nvim/lazy/nvim-treesitter/parser/",
 	})
 
-	// TODO: rewrite in Phase 3 to use per-profile CLI list from ProfileConfig.CLI
+	// Language runtimes — from registry ContainerPaths
+	for _, rl := range langs {
+		rt := rl.Runtime
+		if rt == nil {
+			continue
+		}
+		version := rt.DefaultVersion
+		for _, cp := range rt.ContainerPaths {
+			containerPath := substituteVars(cp.Container, version, track.Arch)
+			installPath := substituteVars(cp.InstallPath, version, track.Arch)
+			specs = append(specs, componentSpec{
+				id:            "runtime/" + rl.Language.Name + "/" + containerPath[strings.LastIndex(containerPath, "/")+1:],
+				containerPath: containerPath,
+				installPath:   installPath,
+				version:       version,
+			})
+		}
+	}
+
+	// CLI tools (union across all profiles)
+	for _, name := range flattenCLI(lock) {
+		specs = append(specs, componentSpec{
+			id:            "cli/" + name,
+			containerPath: "/usr/local/bin/" + name,
+			installPath:   "~/.local/bin/" + name,
+		})
+	}
 
 	var components []store.Component
 	for _, spec := range specs {
 		tmpDir := fmt.Sprintf("/tmp/ferry-extract-%s-%s", containerID[:8], sanitizeID(spec.id))
 
-		cpCmd := exec.Command("docker", "cp",
-			containerID+":"+spec.containerPath, tmpDir)
+		cpCmd := exec.Command("docker", "cp", containerID+":"+spec.containerPath, tmpDir)
 		if out, err := cpCmd.CombinedOutput(); err != nil {
-			// Skip missing components (e.g. runtimes not installed for this profile).
 			_ = out
 			continue
 		}
-		// Ensure temp dir is always cleaned up even if we continue early.
 		defer os.RemoveAll(tmpDir)
 
 		compressed, err := store.CompressDir(tmpDir, lock.Bundle.Exclude)
@@ -83,6 +108,7 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 
 		components = append(components, store.Component{
 			ID:             spec.id,
+			Version:        spec.version,
 			Hash:           hash,
 			SizeCompressed: int64(len(compressed)),
 			InstallPath:    spec.installPath,
@@ -90,7 +116,6 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 			ArchSpecific:   true,
 		})
 	}
-
 	return components, nil
 }
 
@@ -109,7 +134,7 @@ func RemoveContainer(containerID string) {
 }
 
 func sanitizeID(id string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(id)
+	return strings.NewReplacer("/", "-", " ", "-").Replace(id)
 }
 
 // BuildState holds the progress state of a single build track.
