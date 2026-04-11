@@ -50,3 +50,23 @@ func TestBuildSizeSummary_transferTime(t *testing.T) {
 		t.Errorf("10Mbps should be slower than 100Mbps: %s vs %s", at10, at100)
 	}
 }
+
+func TestTransferTime_edgeCases(t *testing.T) {
+	tests := []struct {
+		totalMB int
+		mbps    int
+		want    string
+	}{
+		{0, 10, "n/a"},
+		{400, 0, "n/a"},
+		{1, 100, "< 1s"},   // integer truncation: 8/100 = 0 seconds
+		{400, 10, "~5m 20s"},
+		{60, 10, "~48s"},
+	}
+	for _, tt := range tests {
+		got := transferTime(tt.totalMB, tt.mbps)
+		if got != tt.want {
+			t.Errorf("transferTime(%d, %d) = %q, want %q", tt.totalMB, tt.mbps, got, tt.want)
+		}
+	}
+}

@@ -2,7 +2,6 @@ package tui
 
 import (
 	"fmt"
-	"os"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -148,6 +147,9 @@ func transferTime(totalMB, mbps int) string {
 	}
 	totalMb := totalMB * 8 // MB to Mb
 	seconds := totalMb / mbps
+	if seconds == 0 {
+		return "< 1s"
+	}
 	if seconds < 60 {
 		return fmt.Sprintf("~%ds", seconds)
 	}
@@ -173,7 +175,7 @@ func renderSizeSummary(name string, prof config.ProfileConfig) string {
 
 // ── Profile wizard ────────────────────────────────────────────────────────
 
-// RunProfileWizard runs the 6-step profile editor for a single profile.
+// RunProfileWizard runs the profile editor for a single profile (7 steps including crypto setup).
 // existing is nil when creating a new profile.
 // Returns the completed ProfileConfig, or (nil, true, nil) if aborted.
 func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*config.ProfileConfig, bool, error) {
@@ -267,7 +269,7 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 
 	// Step 5: SSH hosts
 	{
-		result, err := RunSSHHostsStep(nil) // no pre-selected for new profiles
+		result, err := RunSSHHostsStep(nil) // TODO: pass existing SSH aliases when editing a profile
 		if err != nil {
 			return nil, false, err
 		}
@@ -370,11 +372,6 @@ func configItemsForProfile(candidates []discovery.ConfigCandidate) []Item {
 		})
 	}
 	return items
-}
-
-func getUserHome() string {
-	h, _ := os.UserHomeDir()
-	return h
 }
 
 func formatBytes(b int64) string {
