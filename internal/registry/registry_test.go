@@ -57,12 +57,10 @@ func TestNames(t *testing.T) {
 }
 
 func TestResolveLanguages(t *testing.T) {
-	enabled := []string{"python", "go"}
-	overrides := map[string]config.LanguageOverride{
-		"python": {LSP: "pylsp", RuntimeVersion: "3.11", ExtraPackages: []string{"numpy", "pandas"}},
-	}
-
-	langs, err := ResolveLanguages(enabled, overrides)
+	langs, err := ResolveLanguages([]config.LanguageConfig{
+		{Name: "python", Tier: "full", LSP: "pylsp", RuntimeVersion: "3.11", ExtraPackages: []string{"numpy", "pandas"}},
+		{Name: "go", Tier: "full"},
+	})
 	if err != nil {
 		t.Fatalf("ResolveLanguages: %v", err)
 	}
@@ -81,17 +79,16 @@ func TestResolveLanguages(t *testing.T) {
 }
 
 func TestResolveLanguagesUnknown(t *testing.T) {
-	_, err := ResolveLanguages([]string{"cobol"}, nil)
+	_, err := ResolveLanguages([]config.LanguageConfig{{Name: "cobol", Tier: "full"}})
 	if err == nil {
 		t.Fatal("expected error for unknown language")
 	}
 }
 
 func TestResolveLanguagesInvalidLSP(t *testing.T) {
-	_, err := ResolveLanguages([]string{"python"},
-		map[string]config.LanguageOverride{
-			"python": {LSP: "rust-analyzer"},
-		})
+	_, err := ResolveLanguages([]config.LanguageConfig{
+		{Name: "python", Tier: "full", LSP: "rust-analyzer"},
+	})
 	if err == nil {
 		t.Fatal("expected error for invalid LSP override")
 	}

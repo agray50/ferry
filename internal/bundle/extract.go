@@ -55,14 +55,7 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 		installPath:   "~/.local/share/nvim/lazy/nvim-treesitter/parser/",
 	})
 
-	// CLI tools
-	for name := range lock.CLI {
-		specs = append(specs, componentSpec{
-			id:            "cli/" + name,
-			containerPath: "/usr/local/bin/" + name,
-			installPath:   "~/.local/bin/" + name,
-		})
-	}
+	// TODO: rewrite in Phase 3 to use per-profile CLI list from ProfileConfig.CLI
 
 	var components []store.Component
 	for _, spec := range specs {

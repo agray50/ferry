@@ -35,7 +35,12 @@ func BuildAll(opts BuildOptions, progress func(state []BuildState)) ([]BuildResu
 		return nil, err
 	}
 
-	langs, err := registry.ResolveLanguages(opts.Lock.Languages.Enabled, opts.Lock.Languages.Overrides)
+	// TODO: rewrite in Phase 3 to resolve per-profile languages
+	var profileLangs []config.LanguageConfig
+	if prof, ok := opts.Lock.Profiles[opts.Profile]; ok {
+		profileLangs = prof.Languages
+	}
+	langs, err := registry.ResolveLanguages(profileLangs)
 	if err != nil {
 		return nil, err
 	}

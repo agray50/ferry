@@ -8,25 +8,37 @@ import (
 	"github.com/BurntSushi/toml"
 )
 
+// LockFile is the top-level ferry.lock structure.
+// Languages and CLI tools are now per-profile; there are no global language settings.
 type LockFile struct {
-	Languages LanguagesConfig          `toml:"languages"`
-	Nvim      NvimConfig               `toml:"nvim"`
-	Shell     ShellConfig              `toml:"shell"`
-	CLI       map[string]string        `toml:"cli"`
-	Configs   []ConfigFile             `toml:"config"`
-	Bundle    BundleConfig             `toml:"bundle"`
-	Profiles  map[string]ProfileConfig `toml:"profiles"`
+	Nvim     NvimConfig               `toml:"nvim"`
+	Shell    ShellConfig              `toml:"shell"`
+	Configs  []ConfigFile             `toml:"config"`
+	Bundle   BundleConfig             `toml:"bundle"`
+	Profiles map[string]ProfileConfig `toml:"profiles"`
 }
 
-type LanguagesConfig struct {
-	Enabled   []string                    `toml:"enabled"`
-	Overrides map[string]LanguageOverride `toml:",remain"`
+// LanguageConfig is a language selection within a profile.
+// Tier selects between full runtime and LSP-only.
+// All fields except Name and Tier are optional — empty means use registry defaults.
+type LanguageConfig struct {
+	Name           string   `toml:"name"`
+	Tier           string   `toml:"tier"` // "full" | "lsp-only"
+	LSP            string   `toml:"lsp,omitempty"`
+	Formatters     []string `toml:"formatters,omitempty"`
+	Linters        []string `toml:"linters,omitempty"`
+	RuntimeVersion string   `toml:"runtime_version,omitempty"`
+	ExtraPackages  []string `toml:"extra_packages,omitempty"`
 }
 
-type LanguageOverride struct {
-	LSP            string   `toml:"lsp"`
-	RuntimeVersion string   `toml:"runtime_version"`
-	ExtraPackages  []string `toml:"extra_packages"`
+// ProfileConfig describes a complete, independently deployable environment.
+// Every field is explicit — no IncludeAll flags.
+type ProfileConfig struct {
+	Description  string           `toml:"description"`
+	Languages    []LanguageConfig `toml:"languages"`
+	Plugins      []string         `toml:"plugins"`
+	CLI          []string         `toml:"cli"`
+	IncludeShell bool             `toml:"include_shell"`
 }
 
 type NvimConfig struct {
@@ -57,15 +69,6 @@ type BundleConfig struct {
 type BundleRequires struct {
 	Packages      []string `toml:"packages"`
 	MinZshVersion string   `toml:"min_zsh_version"`
-}
-
-type ProfileConfig struct {
-	Description       string   `toml:"description"`
-	Languages         []string `toml:"languages"`
-	Plugins           []string `toml:"plugins"`
-	IncludeAllPlugins bool     `toml:"include_all_plugins"`
-	IncludeShell      bool     `toml:"include_shell"`
-	IncludeCLI        bool     `toml:"include_cli"`
 }
 
 // ReadLockFile reads and parses ferry.lock from the current directory.
@@ -116,20 +119,19 @@ func DefaultLockFile() *LockFile {
 		},
 		Profiles: map[string]ProfileConfig{
 			"default": {
-				Description:       "full dev environment",
-				IncludeAllPlugins: true,
-				IncludeShell:      true,
-				IncludeCLI:        true,
+				Description:  "full dev environment",
+				Languages:    []LanguageConfig{},
+				IncludeShell: true,
+				CLI:          []string{"rg", "fzf", "zoxide", "jq"},
 			},
 			"minimal": {
 				Description:  "nvim + shell only",
 				IncludeShell: true,
-				IncludeCLI:   false,
 			},
 			"server": {
 				Description:  "shell and CLI tools, lightweight nvim",
 				IncludeShell: true,
-				IncludeCLI:   true,
+				CLI:          []string{"rg", "fzf", "jq"},
 			},
 		},
 	}

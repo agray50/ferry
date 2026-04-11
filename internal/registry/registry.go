@@ -142,32 +142,31 @@ func IsValidLSP(language, lsp string) bool {
 	return false
 }
 
-// ResolveLanguages takes a list of language names and applies overrides.
-func ResolveLanguages(enabled []string, overrides map[string]config.LanguageOverride) ([]Language, error) {
+// ResolveLanguages resolves a list of LanguageConfig entries against the registry.
+// TODO: rewrite in Phase 3 to fully handle Tier, Formatters, Linters fields.
+func ResolveLanguages(langs []config.LanguageConfig) ([]Language, error) {
 	var out []Language
-	for _, name := range enabled {
-		l, err := Get(name)
+	for _, lc := range langs {
+		l, err := Get(lc.Name)
 		if err != nil {
 			return nil, err
 		}
 
-		if ov, ok := overrides[name]; ok {
-			if ov.LSP != "" {
-				if !IsValidLSP(name, ov.LSP) {
-					return nil, fmt.Errorf("invalid LSP %q for language %q", ov.LSP, name)
-				}
-				l.LSP = ov.LSP
+		if lc.LSP != "" {
+			if !IsValidLSP(lc.Name, lc.LSP) {
+				return nil, fmt.Errorf("invalid LSP %q for language %q", lc.LSP, lc.Name)
 			}
-			if l.Runtime != nil && (ov.RuntimeVersion != "" || len(ov.ExtraPackages) > 0) {
-				rt := *l.Runtime
-				if ov.RuntimeVersion != "" {
-					rt.DefaultVersion = ov.RuntimeVersion
-				}
-				if len(ov.ExtraPackages) > 0 {
-					rt.ExtraPackages = append(rt.ExtraPackages, ov.ExtraPackages...)
-				}
-				l.Runtime = &rt
+			l.LSP = lc.LSP
+		}
+		if l.Runtime != nil && (lc.RuntimeVersion != "" || len(lc.ExtraPackages) > 0) {
+			rt := *l.Runtime
+			if lc.RuntimeVersion != "" {
+				rt.DefaultVersion = lc.RuntimeVersion
 			}
+			if len(lc.ExtraPackages) > 0 {
+				rt.ExtraPackages = append(rt.ExtraPackages, lc.ExtraPackages...)
+			}
+			l.Runtime = &rt
 		}
 		out = append(out, l)
 	}

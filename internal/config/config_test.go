@@ -14,7 +14,14 @@ func TestReadWriteLockFile(t *testing.T) {
 
 	lf := DefaultLockFile()
 	lf.Nvim.Version = "0.10.0"
-	lf.Languages.Enabled = []string{"go", "python"}
+	// Languages are now per-profile; set on the default profile
+	if prof, ok := lf.Profiles["default"]; ok {
+		prof.Languages = []LanguageConfig{
+			{Name: "go", Tier: "full"},
+			{Name: "python", Tier: "full"},
+		}
+		lf.Profiles["default"] = prof
+	}
 
 	if err := WriteLockFile(lf); err != nil {
 		t.Fatalf("WriteLockFile: %v", err)
@@ -27,8 +34,8 @@ func TestReadWriteLockFile(t *testing.T) {
 	if got.Nvim.Version != "0.10.0" {
 		t.Errorf("version: got %q want %q", got.Nvim.Version, "0.10.0")
 	}
-	if len(got.Languages.Enabled) != 2 {
-		t.Errorf("languages: got %d want 2", len(got.Languages.Enabled))
+	if len(got.Profiles["default"].Languages) != 2 {
+		t.Errorf("languages: got %d want 2", len(got.Profiles["default"].Languages))
 	}
 }
 

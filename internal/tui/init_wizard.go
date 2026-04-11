@@ -77,13 +77,20 @@ func RunInitWizard(existing *config.LockFile) (*InitWizardResult, error) {
 		if mm.aborted {
 			return &InitWizardResult{Aborted: true}, nil
 		}
-		var enabled []string
+		// TODO: rewrite in Phase 2 to use per-profile LanguageConfig with Tier selection
+		var langConfigs []config.LanguageConfig
 		for _, item := range mm.Items {
 			if item.Selected {
-				enabled = append(enabled, item.Value)
+				langConfigs = append(langConfigs, config.LanguageConfig{Name: item.Value, Tier: "full"})
 			}
 		}
-		lf.Languages.Enabled = enabled
+		if lf.Profiles == nil {
+			lf.Profiles = config.DefaultLockFile().Profiles
+		}
+		if prof, ok := lf.Profiles["default"]; ok {
+			prof.Languages = langConfigs
+			lf.Profiles["default"] = prof
+		}
 	}
 
 	// Step 3: Shell config
@@ -109,11 +116,19 @@ func RunInitWizard(existing *config.LockFile) (*InitWizardResult, error) {
 		if mm.aborted {
 			return &InitWizardResult{Aborted: true}, nil
 		}
-		lf.CLI = make(map[string]string)
+		// TODO: rewrite in Phase 2 to use per-profile CLI list
+		var cliSelected []string
 		for _, item := range mm.Items {
 			if item.Selected {
-				lf.CLI[item.Value] = item.Extra
+				cliSelected = append(cliSelected, item.Value)
 			}
+		}
+		if lf.Profiles == nil {
+			lf.Profiles = config.DefaultLockFile().Profiles
+		}
+		if prof, ok := lf.Profiles["default"]; ok {
+			prof.CLI = cliSelected
+			lf.Profiles["default"] = prof
 		}
 	}
 
@@ -229,10 +244,13 @@ func pluginItems(plugins []discovery.PluginInfo, existing *config.LockFile) []It
 }
 
 func languageItems(langs []discovery.LanguageDiscovery, existing *config.LockFile) []Item {
+	// TODO: rewrite in Phase 2 to use per-profile LanguageConfig
 	existingSet := map[string]bool{}
 	if existing != nil {
-		for _, l := range existing.Languages.Enabled {
-			existingSet[l] = true
+		if prof, ok := existing.Profiles["default"]; ok {
+			for _, lc := range prof.Languages {
+				existingSet[lc.Name] = true
+			}
 		}
 	}
 
@@ -250,10 +268,13 @@ func languageItems(langs []discovery.LanguageDiscovery, existing *config.LockFil
 }
 
 func cliItems(tools []discovery.CLITool, existing *config.LockFile) []Item {
+	// TODO: rewrite in Phase 2 to use per-profile CLI list
 	existingSet := map[string]bool{}
 	if existing != nil {
-		for name := range existing.CLI {
-			existingSet[name] = true
+		if prof, ok := existing.Profiles["default"]; ok {
+			for _, name := range prof.CLI {
+				existingSet[name] = true
+			}
 		}
 	}
 

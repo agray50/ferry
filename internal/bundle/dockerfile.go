@@ -77,10 +77,8 @@ func GenerateDockerfile(track BuildTrack, lock *config.LockFile, langs []registr
 		if lang.Runtime == nil || lang.Runtime.Manager == "none" {
 			continue
 		}
+		// TODO: rewrite in Phase 3 to apply per-profile LanguageConfig overrides
 		version := lang.Runtime.DefaultVersion
-		if ov, ok := lock.Languages.Overrides[lang.Name]; ok && ov.RuntimeVersion != "" {
-			version = ov.RuntimeVersion
-		}
 
 		switch lang.Runtime.Manager {
 		case "pyenv":
@@ -132,24 +130,7 @@ func GenerateDockerfile(track BuildTrack, lock *config.LockFile, langs []registr
 		}
 	}
 
-	// Static CLI tools — use pinned versions from CLIDownloads
-	for name := range lock.CLI {
-		spec, ok := CLIDownloads[name]
-		if !ok || spec.URLTemplate == "" {
-			continue
-		}
-		dlArch := track.Arch
-		if a, ok := spec.Arches[track.Arch]; ok {
-			dlArch = a
-		}
-		url := strings.ReplaceAll(spec.URLTemplate, "{ARCH}", dlArch)
-		url = strings.ReplaceAll(url, "{VERSION}", spec.Version)
-		b.WriteString(fmt.Sprintf("# %s\n", name))
-		b.WriteString(fmt.Sprintf("RUN curl -fsSL %s -o /tmp/%s.download && "+
-			"chmod +x /tmp/%s.download && "+
-			"mv /tmp/%s.download /usr/local/bin/%s || true\n\n",
-			url, name, name, name, name))
-	}
+	// TODO: rewrite in Phase 3 to use per-profile CLI list from ProfileConfig.CLI
 
 	// Build marker
 	b.WriteString("RUN echo \"ferry-build-complete\"\n")
