@@ -19,14 +19,14 @@ var bundleCmd = &cobra.Command{
 
 func init() {
 	bundleCmd.Flags().String("arch", "all", "Target architecture: x86_64, arm64, or all")
-	bundleCmd.Flags().String("libc", "all", "Target libc: glibc, musl, or all")
+	bundleCmd.Flags().String("os", "all", "target OS: linux|darwin|all")
 	bundleCmd.Flags().String("profile", "default", "Profile name to build")
 	bundleCmd.Flags().Bool("force", false, "Force rebuild even if bundle is up to date")
 }
 
 func runBundle(cmd *cobra.Command, args []string) error {
 	arch, _ := cmd.Flags().GetString("arch")
-	libc, _ := cmd.Flags().GetString("libc")
+	osFlag, _ := cmd.Flags().GetString("os")
 	profile, _ := cmd.Flags().GetString("profile")
 	force, _ := cmd.Flags().GetBool("force")
 
@@ -43,7 +43,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("ferry.lock not found — run: ferry init\n  %w", err)
 	}
 
-	tracks := bundle.FilterTracks(arch, libc)
+	tracks := bundle.FilterTracks(arch, osFlag)
 	fmt.Printf("⛴  ferry bundle\n\n")
 	fmt.Printf("building %d tracks...\n\n", len(tracks))
 
@@ -54,7 +54,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	opts := bundle.BuildOptions{
 		Arch:    arch,
-		Libc:    libc,
+		OS:      osFlag,
 		Profile: profile,
 		Force:   force,
 		Lock:    lock,
@@ -74,7 +74,7 @@ func runBundle(cmd *cobra.Command, args []string) error {
 
 	var failures []bundle.BuildResult
 	for _, r := range results {
-		track := fmt.Sprintf("%s-%s", r.Track.Arch, r.Track.Libc)
+		track := fmt.Sprintf("%s-%s", r.Track.Arch, r.Track.OS)
 		if r.Error != nil {
 			fmt.Printf("  %-20s FAILED      %s\n", track, r.Duration.Round(time.Second))
 			failures = append(failures, r)
@@ -90,8 +90,8 @@ func runBundle(cmd *cobra.Command, args []string) error {
 	if len(failures) > 0 {
 		fmt.Printf("\n  %d track(s) failed:\n", len(failures))
 		for _, f := range failures {
-			fmt.Printf("  %s-%s: %v\n", f.Track.Arch, f.Track.Libc, f.Error)
-			fmt.Printf("    see ~/.ferry/logs/bundle-%s-%s.log\n", f.Track.Arch, f.Track.Libc)
+			fmt.Printf("  %s-%s: %v\n", f.Track.Arch, f.Track.OS, f.Error)
+			fmt.Printf("    see ~/.ferry/logs/bundle-%s-%s.log\n", f.Track.Arch, f.Track.OS)
 		}
 		return fmt.Errorf("%d track(s) failed", len(failures))
 	}
@@ -111,7 +111,7 @@ func (pp *progressPrinter) render(states []bundle.BuildState) {
 		fmt.Printf("\033[%dA", pp.lineCount)
 	}
 	for _, s := range states {
-		track := fmt.Sprintf("%s-%s", s.Track.Arch, s.Track.Libc)
+		track := fmt.Sprintf("%s-%s", s.Track.Arch, s.Track.OS)
 		bar := progressBar(s.Status)
 		dur := ""
 		if s.Duration > 0 {

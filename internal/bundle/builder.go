@@ -17,7 +17,7 @@ import (
 // BuildOptions controls ferry bundle behaviour.
 type BuildOptions struct {
 	Arch    string
-	Libc    string
+	OS      string
 	Profile string
 	Force   bool
 	Lock    *config.LockFile
@@ -25,9 +25,9 @@ type BuildOptions struct {
 
 // BuildAll builds all selected tracks in parallel.
 func BuildAll(opts BuildOptions, progress func(state []BuildState)) ([]BuildResult, error) {
-	tracks := FilterTracks(opts.Arch, opts.Libc)
+	tracks := FilterTracks(opts.Arch, opts.OS)
 	if len(tracks) == 0 {
-		return nil, fmt.Errorf("no tracks match arch=%s libc=%s", opts.Arch, opts.Libc)
+		return nil, fmt.Errorf("no tracks match arch=%s os=%s", opts.Arch, opts.OS)
 	}
 
 	lockHash, err := config.LockFileHash()
