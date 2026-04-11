@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -84,14 +85,14 @@ func (m sshHostsModel) updateSelect(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.hosts)-1 {
 			m.cursor++
 		}
-	case " ", "tab":
+	case " ":
 		if m.cursor < len(m.selected) {
 			m.selected[m.cursor] = !m.selected[m.cursor]
 		}
 	case "a":
 		m.mode = sshModeAddForm
 		m.form = addHostForm{}
-	case "enter", "q":
+	case "enter":
 		m.done = true
 		return m, tea.Quit
 	case "esc":
@@ -191,8 +192,8 @@ func (m sshHostsModel) deleteChar() sshHostsModel {
 
 func (m sshHostsModel) formToHost() discovery.SSHHost {
 	port := 22
-	if m.form.port != "" {
-		fmt.Sscanf(m.form.port, "%d", &port)
+	if p, err := strconv.Atoi(m.form.port); err == nil {
+		port = p
 	}
 	ident := m.form.identity
 	if ident == "" {

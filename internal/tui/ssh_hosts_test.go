@@ -79,3 +79,52 @@ func TestSSHHostsModel_selectedAliases(t *testing.T) {
 		t.Fatalf("want 2 selected, got %d", len(aliases))
 	}
 }
+
+func TestSSHHostsModel_selectedAliasesContent(t *testing.T) {
+	hosts := []discovery.SSHHost{
+		{Alias: "prod-vm"},
+		{Alias: "dev-vm"},
+		{Alias: "staging"},
+	}
+	m := newSSHHostsModel(hosts, []string{"prod-vm", "staging"})
+	aliases := m.selectedAliases()
+	if len(aliases) != 2 {
+		t.Fatalf("want 2 selected, got %d", len(aliases))
+	}
+	if aliases[0] != "prod-vm" {
+		t.Errorf("want first alias prod-vm, got %s", aliases[0])
+	}
+	if aliases[1] != "staging" {
+		t.Errorf("want second alias staging, got %s", aliases[1])
+	}
+}
+
+func TestSSHHostsModel_formToHostDefaults(t *testing.T) {
+	m := newSSHHostsModel(nil, nil)
+	m.form.alias = "my-vm"
+	m.form.hostname = "10.0.0.1"
+	// port and identity left empty
+
+	h := m.formToHost()
+	if h.Port != 22 {
+		t.Errorf("want default port 22, got %d", h.Port)
+	}
+	if h.IdentityFile != "~/.ssh/id_ed25519" {
+		t.Errorf("want default identity, got %s", h.IdentityFile)
+	}
+	if !h.FerryManaged {
+		t.Error("want FerryManaged=true")
+	}
+}
+
+func TestSSHHostsModel_formToHostInvalidPort(t *testing.T) {
+	m := newSSHHostsModel(nil, nil)
+	m.form.alias = "my-vm"
+	m.form.hostname = "10.0.0.1"
+	m.form.port = "notanumber"
+
+	h := m.formToHost()
+	if h.Port != 22 {
+		t.Errorf("invalid port should default to 22, got %d", h.Port)
+	}
+}
