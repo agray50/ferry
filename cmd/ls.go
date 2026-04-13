@@ -49,11 +49,3 @@ func runLs(cmd *cobra.Command, args []string) error {
 	fmt.Print(table)
 	return nil
 }
-
-func isTerminal() bool {
-	info, err := os.Stdout.Stat()
-	if err != nil {
-		return false
-	}
-	return (info.Mode() & os.ModeCharDevice) != 0
-}
