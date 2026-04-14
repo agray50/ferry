@@ -1,0 +1,20 @@
+FROM golang:1.22-alpine AS builder
+
+ARG VERSION=dev
+
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN mkdir -p /out && \
+    GOOS=linux  GOARCH=amd64 go build -ldflags="-X main.Version=${VERSION} -s -w" -o /out/ferry-linux-amd64  . && \
+    GOOS=linux  GOARCH=arm64 go build -ldflags="-X main.Version=${VERSION} -s -w" -o /out/ferry-linux-arm64  . && \
+    GOOS=darwin GOARCH=amd64 go build -ldflags="-X main.Version=${VERSION} -s -w" -o /out/ferry-darwin-amd64 . && \
+    GOOS=darwin GOARCH=arm64 go build -ldflags="-X main.Version=${VERSION} -s -w" -o /out/ferry-darwin-arm64 .
+
+# Final stage: just the binaries
+FROM scratch
+COPY --from=builder /out /

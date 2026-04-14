@@ -26,6 +26,8 @@ type langItem struct {
 type langListModel struct {
 	items        []langItem
 	cursor       int
+	offset       int // top of visible window
+	height       int // terminal height (set via WindowSizeMsg)
 	mode         langMode
 	configurator langConfiguratorModel
 	done         bool
@@ -51,6 +53,10 @@ func newLangListModel(langs []registry.Language, existing []config.LanguageConfi
 func (m langListModel) Init() tea.Cmd { return nil }
 
 func (m langListModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	if ws, ok := msg.(tea.WindowSizeMsg); ok {
+		m.height = ws.Height
+		return m, nil
+	}
 	if m.mode == langModeConfig {
 		return m.updateConfigurator(msg)
 	}
@@ -69,10 +75,16 @@ func (m langListModel) updateList(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case "up", "k":
 		if m.cursor > 0 {
 			m.cursor--
+			if m.cursor < m.offset {
+				m.offset = m.cursor
+			}
 		}
 	case "down", "j":
 		if m.cursor < len(m.items)-1 {
 			m.cursor++
+			if m.cursor >= m.offset+m.visibleHeight() {
+				m.offset = m.cursor - m.visibleHeight() + 1
+			}
 		}
 	case " ", "tab":
 		m.items[m.cursor].selected = !m.items[m.cursor].selected
@@ -115,8 +127,18 @@ func (m langListModel) View() string {
 		return m.configurator.View()
 	}
 	var b strings.Builder
-	b.WriteString(titleStyle.Render("Languages — select to include, enter to configure") + "\n\n")
-	for i, item := range m.items {
+	selected := len(m.selectedConfigs())
+	header := fmt.Sprintf("Languages — %d/%d selected", selected, len(m.items))
+	b.WriteString(titleStyle.Render(header) + "\n\n")
+
+	vh := m.visibleHeight()
+	end := m.offset + vh
+	if end > len(m.items) {
+		end = len(m.items)
+	}
+
+	for i := m.offset; i < end; i++ {
+		item := m.items[i]
 		cursor := "  "
 		if i == m.cursor {
 			cursor = cursorStyle.Render("❯ ")
@@ -137,10 +159,25 @@ func (m langListModel) View() string {
 		if item.selected {
 			configHint = highlightStyle.Render("  [configure ▸]")
 		}
-		b.WriteString(fmt.Sprintf("%s%s %s%s%s\n", cursor, checkbox, item.lang.Name, tierLabel, configHint))
+		b.WriteString(fmt.Sprintf("%s%s %-14s%s%s\n", cursor, checkbox, item.lang.Name, tierLabel, configHint))
 	}
-	b.WriteString(subtleStyle.Render("\n  space: toggle   enter: configure   q: done   ↑↓: navigate   ctrl+c: abort\n"))
+
+	// scroll indicator
+	if len(m.items) > vh {
+		scrollInfo := fmt.Sprintf("%d-%d of %d", m.offset+1, end, len(m.items))
+		b.WriteString(subtleStyle.Render(fmt.Sprintf("\n  %s\n", scrollInfo)))
+	}
+	b.WriteString(subtleStyle.Render("  space: toggle   enter: configure   q: done   ↑↓: navigate   ctrl+c: abort\n"))
 	return b.String()
+}
+
+func (m langListModel) visibleHeight() int {
+	const overhead = 6 // title + blank + footer + padding
+	h := m.height - overhead
+	if h < 8 {
+		h = 15 // sensible default before first WindowSizeMsg
+	}
+	return h
 }
 
 func (m langListModel) selectedConfigs() []config.LanguageConfig {
@@ -155,7 +192,7 @@ func (m langListModel) selectedConfigs() []config.LanguageConfig {
 
 func RunLangStep(allLangs []registry.Language, existing []config.LanguageConfig) ([]config.LanguageConfig, bool, error) {
 	m := newLangListModel(allLangs, existing)
-	p := tea.NewProgram(m)
+	p := tea.NewProgram(m, tea.WithAltScreen())
 	final, err := p.Run()
 	if err != nil {
 		return nil, false, err
