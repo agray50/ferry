@@ -13,7 +13,6 @@ import (
 type LockFile struct {
 	Nvim     NvimConfig               `toml:"nvim"`
 	Shell    ShellConfig              `toml:"shell"`
-	Configs  []ConfigFile             `toml:"config"`
 	Bundle   BundleConfig             `toml:"bundle"`
 	Profiles map[string]ProfileConfig `toml:"profiles"`
 }
@@ -52,12 +51,6 @@ type ShellConfig struct {
 	ThemeConfig       string `toml:"theme_config"`
 	PluginManager     string `toml:"plugin_manager"`
 	PluginManagerPath string `toml:"plugin_manager_path"`
-}
-
-type ConfigFile struct {
-	Source  string `toml:"source"`
-	Target  string `toml:"target"`
-	Encrypt bool   `toml:"encrypt"`
 }
 
 type BundleConfig struct {
@@ -104,6 +97,7 @@ func LockFileHash() (string, error) {
 // DefaultLockFile returns a LockFile with sensible defaults applied.
 func DefaultLockFile() *LockFile {
 	return &LockFile{
+		Nvim: NvimConfig{Version: "0.10.4"},
 		Bundle: BundleConfig{
 			Compress: "zstd",
 			Exclude: []string{

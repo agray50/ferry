@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -29,7 +30,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	existing, err := config.ReadLockFile()
 	if err == nil {
 		lf = existing
-	} else if !os.IsNotExist(err) {
+	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("reading ferry.lock: %w", err)
 	}
 	if lf == nil {
@@ -41,7 +42,12 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return runProfileWizard(lf, profileFlag)
 	}
 
-	// Profile manager loop
+	return runProfileManagerLoop(lf)
+}
+
+// runProfileManagerLoop runs the interactive profile manager loop until the
+// user quits. Used by both ferry init and ferry ls --interactive.
+func runProfileManagerLoop(lf *config.LockFile) error {
 	for {
 		result, err := tui.RunProfileManager(lf, false)
 		if err != nil {

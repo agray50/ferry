@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 func FerryDir() string {
@@ -10,16 +11,17 @@ func FerryDir() string {
 	return filepath.Join(home, ".ferry")
 }
 
-func KeyFile() string {
-	return filepath.Join(FerryDir(), "key.txt")
-}
-
-func PubKeyFile() string {
-	return filepath.Join(FerryDir(), "key.pub")
-}
-
 func TargetsFilePath() string {
 	return filepath.Join(FerryDir(), "targets.json")
+}
+
+// ExpandHome replaces a leading ~/ with $HOME/ so the result is suitable for
+// embedding in shell scripts where variable expansion will occur.
+func ExpandHome(path string) string {
+	if strings.HasPrefix(path, "~/") {
+		return "$HOME/" + path[2:]
+	}
+	return path
 }
 
 func StoreDir() string {

@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -25,7 +26,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 
 	lf, err := config.ReadLockFile()
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			fmt.Println("⛴  ferry ls\n\n  no ferry.lock found — run: ferry init")
 			return nil
 		}
@@ -33,12 +34,7 @@ func runLs(cmd *cobra.Command, args []string) error {
 	}
 
 	if interactive {
-		result, err := tui.RunProfileManager(lf, false)
-		if err != nil {
-			return err
-		}
-		_ = result
-		return nil
+		return runProfileManagerLoop(lf)
 	}
 
 	// Static table output

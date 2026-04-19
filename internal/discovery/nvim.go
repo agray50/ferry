@@ -53,14 +53,41 @@ func DiscoverNvim() NvimDiscovery {
 	var plugins []PluginInfo
 
 	// ── lazy.nvim ─────────────────────────────────────────────────────────
-	lazyLock := filepath.Join(d.ConfigPath, "lazy-lock.json")
-	if _, err := os.Stat(lazyLock); err == nil {
-		d.LazyLock = lazyLock
-		for _, p := range parseLazyPlugins(lazyLock, home) {
-			if !seen[p.Name] {
-				seen[p.Name] = true
-				plugins = append(plugins, p)
+	// lazy-lock.json may be in the config dir or one level up (dotfiles repos
+	// often symlink ~/.config/nvim to a subdirectory of a dotfiles repo, and
+	// that symlink may be broken in this environment). Try both the resolved
+	// config path and the canonical XDG location.
+	lazyLockCandidates := []string{
+		filepath.Join(d.ConfigPath, "lazy-lock.json"),
+	}
+	// Also try resolving symlinks in case ConfigPath itself is a symlink
+	if resolved, err := filepath.EvalSymlinks(d.ConfigPath); err == nil && resolved != d.ConfigPath {
+		lazyLockCandidates = append(lazyLockCandidates, filepath.Join(resolved, "lazy-lock.json"))
+	}
+	for _, lazyLock := range lazyLockCandidates {
+		if _, err := os.Stat(lazyLock); err == nil {
+			d.LazyLock = lazyLock
+			for _, p := range parseLazyPlugins(lazyLock, home) {
+				if !seen[p.Name] {
+					seen[p.Name] = true
+					plugins = append(plugins, p)
+				}
 			}
+			break
+		}
+	}
+
+	// Even without a lock file, scan the lazy data dir directly — covers
+	// broken symlink configs where the lock file can't be found.
+	lazyDataDir := filepath.Join(home, ".local", "share", "nvim", "lazy")
+	if entries, err := os.ReadDir(lazyDataDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() || seen[e.Name()] {
+				continue
+			}
+			seen[e.Name()] = true
+			size, _ := dirSize(filepath.Join(lazyDataDir, e.Name()))
+			plugins = append(plugins, PluginInfo{Name: e.Name(), SizeBytes: size})
 		}
 	}
 

@@ -108,6 +108,35 @@ func TestCompressExtractRoundtrip(t *testing.T) {
 	}
 }
 
+func TestCompressExtractSymlinks(t *testing.T) {
+	src := t.TempDir()
+	os.WriteFile(filepath.Join(src, "real.txt"), []byte("real content"), 0644)
+	// symlink to a file within the archive
+	os.Symlink("real.txt", filepath.Join(src, "link.txt"))
+	// symlink with absolute path (e.g. /usr/bin/python -> python3.12)
+	os.Symlink("/usr/bin/python3", filepath.Join(src, "python"))
+
+	compressed, err := CompressDir(src, nil)
+	if err != nil {
+		t.Fatalf("CompressDir with symlinks: %v", err)
+	}
+
+	dest := t.TempDir()
+	if err := ExtractTo(compressed, dest); err != nil {
+		t.Fatalf("ExtractTo with symlinks: %v", err)
+	}
+
+	// Check symlink was preserved
+	target, err := os.Readlink(filepath.Join(dest, "link.txt"))
+	if err != nil || target != "real.txt" {
+		t.Errorf("link.txt symlink: got %q want real.txt", target)
+	}
+	target, err = os.Readlink(filepath.Join(dest, "python"))
+	if err != nil || target != "/usr/bin/python3" {
+		t.Errorf("python symlink: got %q want /usr/bin/python3", target)
+	}
+}
+
 func TestDiffManifests(t *testing.T) {
 	local := &Manifest{
 		Components: []Component{

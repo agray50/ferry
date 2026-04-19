@@ -2,6 +2,7 @@ package store
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 
 	"github.com/anthropics/ferry/internal/config"
 )
+
 
 func manifestFilename(profile, arch, libc, hash string) string {
 	return fmt.Sprintf("%s-%s-%s-%s.json", profile, arch, libc, hash)
@@ -47,7 +49,7 @@ func ReadManifest(profile, arch, libc, hash string) (*Manifest, error) {
 func ListManifests() ([]*Manifest, error) {
 	dir := config.BundlesDir()
 	entries, err := os.ReadDir(dir)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil, nil
 	}
 	if err != nil {
@@ -60,10 +62,12 @@ func ListManifests() ([]*Manifest, error) {
 		}
 		data, err := os.ReadFile(filepath.Join(dir, e.Name()))
 		if err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping manifest %s: %v\n", e.Name(), err)
 			continue
 		}
 		var m Manifest
 		if err := json.Unmarshal(data, &m); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: skipping malformed manifest %s: %v\n", e.Name(), err)
 			continue
 		}
 		out = append(out, &m)
@@ -80,6 +84,7 @@ func FindManifest(profile, arch, libc string) (*Manifest, error) {
 	var found *Manifest
 	for _, m := range manifests {
 		if m.Profile == profile && m.Arch == arch && m.Libc == libc {
+			// BuiltAt is RFC3339 (e.g. "2006-01-02T15:04:05Z"), which sorts correctly as a string.
 			if found == nil || m.BuiltAt > found.BuiltAt {
 				found = m
 			}

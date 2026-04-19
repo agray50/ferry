@@ -26,9 +26,8 @@ type Component struct {
 	Hash           string `json:"hash"`
 	SizeCompressed int64  `json:"size_compressed"`
 	InstallPath    string `json:"install_path"`
-	BinSymlink     string `json:"bin_symlink,omitempty"`
-	ArchSpecific   bool   `json:"arch_specific"`
-	Encrypted      bool   `json:"encrypted,omitempty"`
+	BinSymlink   string `json:"bin_symlink,omitempty"`
+	ArchSpecific bool   `json:"arch_specific"`
 }
 
 // ComponentMeta holds metadata for a stored blob.

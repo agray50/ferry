@@ -2,6 +2,7 @@ package config
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 )
@@ -22,7 +23,7 @@ type Target struct {
 func ReadTargets() (TargetsFile, error) {
 	path := TargetsFilePath()
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return make(TargetsFile), nil
 	}
 	if err != nil {
