@@ -6,14 +6,25 @@ import (
 	"compress/gzip"
 	"fmt"
 	"io"
-	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
 
+	"github.com/hashicorp/go-retryablehttp"
+	"github.com/ulikunitz/xz"
+
 	"github.com/anthropics/ferry/internal/registry"
 	"github.com/anthropics/ferry/internal/store"
 )
+
+// httpClient is a shared retryable HTTP client with a 3-retry policy and
+// no logger output. Reused across all downloads in a build session.
+var httpClient = func() *retryablehttp.Client {
+	c := retryablehttp.NewClient()
+	c.RetryMax = 3
+	c.Logger = nil // suppress default INFO log lines
+	return c
+}()
 
 // BuildMacOSComponent downloads a runtime for a darwin track, extracts it
 // to a temp directory, and stores it as a content-addressed component.
@@ -24,38 +35,44 @@ func BuildMacOSComponent(lang registry.ResolvedLanguage, track BuildTrack, s *st
 	}
 	version := rt.DefaultVersion
 
-	var components []store.Component
-	for i, path := range rt.ContainerPaths {
-		_ = path.Container // unused for darwin; MacOSDownloads used instead
+	// MacOSDownloads provides arch-specific variants for the primary runtime
+	// (ContainerPaths[0]). Multi-path runtimes (e.g. Go runtime + tools) only
+	// bundle the primary path; supplementary paths require separate downloads.
+	if len(rt.ContainerPaths) == 0 {
+		return nil, nil
+	}
+	cp := rt.ContainerPaths[0]
 
-		if i >= len(rt.MacOSDownloads) {
-			break
-		}
+	var components []store.Component
+	{
 		dl, err := selectMacOSDownload(rt.MacOSDownloads, track.Arch)
 		if err != nil {
 			return nil, fmt.Errorf("no macOS download for %s/%s: %w", lang.Language.Name, track.Arch, err)
 		}
 
-		url := substituteDownloadURL(dl.URL, version, track.Arch)
-		installPath := substituteDownloadURL(path.InstallPath, version, track.Arch)
+		url := substituteVars(dl.URL, version, track.Arch)
+		installPath := substituteVars(cp.InstallPath, version, track.Arch)
 
 		tmpFile, err := downloadToTemp(url)
 		if err != nil {
 			return nil, fmt.Errorf("downloading %s: %w", url, err)
 		}
-		defer os.Remove(tmpFile)
 
 		tmpDir, err := os.MkdirTemp("", "ferry-macos-*")
 		if err != nil {
+			os.Remove(tmpFile)
 			return nil, err
 		}
-		defer os.RemoveAll(tmpDir)
 
-		if err := extractArchive(tmpFile, dl.ArchiveRoot, tmpDir); err != nil {
-			return nil, fmt.Errorf("extracting %s: %w", url, err)
+		extractErr := extractArchive(tmpFile, dl.ArchiveRoot, tmpDir)
+		os.Remove(tmpFile)
+		if extractErr != nil {
+			os.RemoveAll(tmpDir)
+			return nil, fmt.Errorf("extracting %s: %w", url, extractErr)
 		}
 
 		compressed, err := store.CompressDir(tmpDir, nil)
+		os.RemoveAll(tmpDir)
 		if err != nil {
 			return nil, fmt.Errorf("compressing %s component: %w", lang.Language.Name, err)
 		}
@@ -75,11 +92,6 @@ func BuildMacOSComponent(lang registry.ResolvedLanguage, track BuildTrack, s *st
 		})
 	}
 	return components, nil
-}
-
-// substituteDownloadURL substitutes {VERSION} and {ARCH} in a URL or path template.
-func substituteDownloadURL(s, version, arch string) string {
-	return substituteVars(s, version, arch)
 }
 
 // selectMacOSDownload picks the best MacOSDownload for the given arch.
@@ -102,8 +114,10 @@ func selectMacOSDownload(downloads []registry.MacOSDownload, arch string) (regis
 }
 
 // downloadToTemp downloads url to a temporary file and returns its path.
+// The temp file preserves the URL's archive extension so extractArchive can
+// dispatch on it (e.g. *.tar.gz, *.tar.xz, *.zip).
 func downloadToTemp(url string) (string, error) {
-	resp, err := http.Get(url) //nolint:gosec
+	resp, err := httpClient.Get(url)
 	if err != nil {
 		return "", err
 	}
@@ -112,7 +126,7 @@ func downloadToTemp(url string) (string, error) {
 		return "", fmt.Errorf("HTTP %d downloading %s", resp.StatusCode, url)
 	}
 
-	f, err := os.CreateTemp("", "ferry-dl-*")
+	f, err := os.CreateTemp("", "ferry-dl-*"+urlArchiveExt(url))
 	if err != nil {
 		return "", err
 	}
@@ -125,13 +139,28 @@ func downloadToTemp(url string) (string, error) {
 	return f.Name(), nil
 }
 
-// extractArchive extracts a .tar.gz, .tar.xz, or .zip archive to destDir.
+// urlArchiveExt returns the archive extension from a URL path (e.g. ".tar.gz"),
+// stripping any query string first. Returns "" for bare binary downloads.
+func urlArchiveExt(url string) string {
+	base := filepath.Base(strings.SplitN(url, "?", 2)[0])
+	for _, ext := range []string{".tar.gz", ".tar.xz", ".tar.zst", ".tgz", ".zip"} {
+		if strings.HasSuffix(base, ext) {
+			return ext
+		}
+	}
+	return ""
+}
+
+// extractArchive extracts a .tar.gz, .tar.xz, .tar.zst, or .zip archive to destDir.
 // If archiveRoot is non-empty, only files under that prefix are extracted.
+// Direct binary downloads (no recognised extension) are copied as-is.
 func extractArchive(path, archiveRoot, destDir string) error {
 	lower := strings.ToLower(path)
 	switch {
 	case strings.HasSuffix(lower, ".tar.gz") || strings.HasSuffix(lower, ".tgz"):
-		return extractTarGz(path, archiveRoot, destDir)
+		return extractTar(path, archiveRoot, destDir, "gz")
+	case strings.HasSuffix(lower, ".tar.xz"):
+		return extractTar(path, archiveRoot, destDir, "xz")
 	case strings.HasSuffix(lower, ".zip"):
 		return extractZip(path, archiveRoot, destDir)
 	default:
@@ -140,20 +169,45 @@ func extractArchive(path, archiveRoot, destDir string) error {
 	}
 }
 
-func extractTarGz(src, root, dest string) error {
+// safeJoin joins dest and name and returns an error if the result escapes dest.
+// Prevents zip-slip / tar-slip path traversal attacks.
+func safeJoin(dest, name string) (string, error) {
+	target := filepath.Join(dest, name)
+	rel, err := filepath.Rel(dest, target)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("archive entry %q would escape destination", name)
+	}
+	return target, nil
+}
+
+// extractTar extracts a tar archive compressed with "gz" or "xz" to dest.
+func extractTar(src, root, dest, compression string) error {
 	f, err := os.Open(src)
 	if err != nil {
 		return err
 	}
 	defer f.Close()
 
-	gr, err := gzip.NewReader(f)
-	if err != nil {
-		return err
+	var r io.Reader
+	switch compression {
+	case "gz":
+		gr, err := gzip.NewReader(f)
+		if err != nil {
+			return err
+		}
+		defer gr.Close()
+		r = gr
+	case "xz":
+		xr, err := xz.NewReader(f)
+		if err != nil {
+			return err
+		}
+		r = xr
+	default:
+		return fmt.Errorf("unsupported compression %q", compression)
 	}
-	defer gr.Close()
 
-	tr := tar.NewReader(gr)
+	tr := tar.NewReader(r)
 	for {
 		hdr, err := tr.Next()
 		if err == io.EOF {
@@ -172,7 +226,10 @@ func extractTarGz(src, root, dest string) error {
 		if name == "" {
 			continue
 		}
-		target := filepath.Join(dest, name)
+		target, err := safeJoin(dest, name)
+		if err != nil {
+			continue // skip malicious entry
+		}
 		if hdr.Typeflag == tar.TypeDir {
 			os.MkdirAll(target, 0755)
 			continue
@@ -184,11 +241,14 @@ func extractTarGz(src, root, dest string) error {
 		if err != nil {
 			return err
 		}
-		if _, err := io.Copy(out, tr); err != nil {
-			out.Close()
-			return err
+		_, copyErr := io.Copy(out, tr)
+		closeErr := out.Close()
+		if copyErr != nil {
+			return copyErr
 		}
-		out.Close()
+		if closeErr != nil {
+			return closeErr
+		}
 	}
 	return nil
 }
@@ -211,7 +271,10 @@ func extractZip(src, root, dest string) error {
 		if name == "" {
 			continue
 		}
-		target := filepath.Join(dest, name)
+		target, err := safeJoin(dest, name)
+		if err != nil {
+			continue // skip malicious entry
+		}
 		if f.FileInfo().IsDir() {
 			os.MkdirAll(target, 0755)
 			continue
@@ -228,9 +291,15 @@ func extractZip(src, root, dest string) error {
 			rc.Close()
 			return err
 		}
-		io.Copy(out, rc)
-		out.Close()
+		_, copyErr := io.Copy(out, rc)
+		closeErr := out.Close()
 		rc.Close()
+		if copyErr != nil {
+			return copyErr
+		}
+		if closeErr != nil {
+			return closeErr
+		}
 	}
 	return nil
 }
@@ -245,7 +314,10 @@ func copyFile(src, dst string) error {
 	if err != nil {
 		return err
 	}
-	defer out.Close()
-	_, err = io.Copy(out, in)
-	return err
+	_, copyErr := io.Copy(out, in)
+	closeErr := out.Close()
+	if copyErr != nil {
+		return copyErr
+	}
+	return closeErr
 }

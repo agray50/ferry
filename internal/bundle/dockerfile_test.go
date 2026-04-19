@@ -12,9 +12,9 @@ func TestGenerateDockerfileContainsBaseFrom(t *testing.T) {
 	track := BuildTracks[0] // linux/x86_64
 	langs, _ := registry.ResolveFromProfile([]config.LanguageConfig{
 		{Name: "python", Tier: "full"},
-	})
+	}, nil)
 	lf := &config.LockFile{}
-	df, err := GenerateDockerfile(track, lf, langs)
+	df, err := GenerateDockerfile(track, lf, "", langs, nil)
 	if err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
 	}
@@ -27,9 +27,9 @@ func TestGenerateDockerfileContainsBuildSteps(t *testing.T) {
 	track := BuildTracks[0]
 	langs, _ := registry.ResolveFromProfile([]config.LanguageConfig{
 		{Name: "python", Tier: "full"},
-	})
+	}, nil)
 	lf := &config.LockFile{}
-	df, err := GenerateDockerfile(track, lf, langs)
+	df, err := GenerateDockerfile(track, lf, "", langs, nil)
 	if err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
 	}
@@ -45,9 +45,9 @@ func TestGenerateDockerfileSubstitutesVersion(t *testing.T) {
 	track := BuildTracks[0]
 	langs, _ := registry.ResolveFromProfile([]config.LanguageConfig{
 		{Name: "python", Tier: "full", RuntimeVersion: "3.11"},
-	})
+	}, nil)
 	lf := &config.LockFile{}
-	df, err := GenerateDockerfile(track, lf, langs)
+	df, err := GenerateDockerfile(track, lf, "", langs, nil)
 	if err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
 	}
@@ -63,9 +63,9 @@ func TestGenerateDockerfileSubstitutesArch(t *testing.T) {
 	track := BuildTracks[0] // x86_64
 	langs, _ := registry.ResolveFromProfile([]config.LanguageConfig{
 		{Name: "go", Tier: "full"},
-	})
+	}, nil)
 	lf := &config.LockFile{}
-	df, err := GenerateDockerfile(track, lf, langs)
+	df, err := GenerateDockerfile(track, lf, "", langs, nil)
 	if err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
 	}
@@ -83,9 +83,9 @@ func TestGenerateDockerfileDeduplicatesSharedRuntime(t *testing.T) {
 	langs, _ := registry.ResolveFromProfile([]config.LanguageConfig{
 		{Name: "javascript", Tier: "full"},
 		{Name: "typescript", Tier: "full"},
-	})
+	}, nil)
 	lf := &config.LockFile{}
-	df, err := GenerateDockerfile(track, lf, langs)
+	df, err := GenerateDockerfile(track, lf, "", langs, nil)
 	if err != nil {
 		t.Fatalf("GenerateDockerfile: %v", err)
 	}
@@ -97,7 +97,7 @@ func TestGenerateDockerfileDeduplicatesSharedRuntime(t *testing.T) {
 
 func TestGenerateDockerfileErrorsForDarwinTrack(t *testing.T) {
 	darwinTrack := BuildTrack{OS: "darwin", BuildMethod: "download"}
-	_, err := GenerateDockerfile(darwinTrack, &config.LockFile{}, nil)
+	_, err := GenerateDockerfile(darwinTrack, &config.LockFile{}, "", nil, nil)
 	if err == nil {
 		t.Error("GenerateDockerfile should return error for darwin track")
 	}

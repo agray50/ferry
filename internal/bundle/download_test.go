@@ -7,14 +7,8 @@ import (
 	"github.com/anthropics/ferry/internal/registry"
 )
 
-func TestSubstituteDownloadURL(t *testing.T) {
-	dl := registry.MacOSDownload{
-		URL:         "https://example.com/{VERSION}/tool-{ARCH}.tar.gz",
-		Arch:        "x86_64",
-		ArchiveRoot: "tool-{VERSION}/",
-		InstallPath: "~/.ferry/runtimes/tool-{VERSION}/",
-	}
-	url := substituteDownloadURL(dl.URL, "1.2.3", "x86_64")
+func TestSubstituteVarsURL(t *testing.T) {
+	url := substituteVars("https://example.com/{VERSION}/tool-{ARCH}.tar.gz", "1.2.3", "x86_64")
 	if strings.Contains(url, "{VERSION}") {
 		t.Error("url should not contain {VERSION}")
 	}
@@ -29,8 +23,8 @@ func TestSubstituteDownloadURL(t *testing.T) {
 	}
 }
 
-func TestSubstituteInstallPath(t *testing.T) {
-	path := substituteDownloadURL("~/.ferry/runtimes/python-{VERSION}/", "3.12.4", "arm64")
+func TestSubstituteVarsInstallPath(t *testing.T) {
+	path := substituteVars("~/.ferry/runtimes/python-{VERSION}/", "3.12.4", "arm64")
 	if path != "~/.ferry/runtimes/python-3.12.4/" {
 		t.Errorf("got %q, want ~/.ferry/runtimes/python-3.12.4/", path)
 	}
