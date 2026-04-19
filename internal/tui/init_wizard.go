@@ -7,8 +7,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/anthropics/ferry/internal/config"
-	"github.com/anthropics/ferry/internal/crypto"
 	"github.com/anthropics/ferry/internal/discovery"
+	"github.com/anthropics/ferry/internal/format"
 	"github.com/anthropics/ferry/internal/registry"
 )
 
@@ -175,7 +175,7 @@ func renderSizeSummary(name string, prof config.ProfileConfig) string {
 
 // ── Profile wizard ────────────────────────────────────────────────────────
 
-// RunProfileWizard runs the profile editor for a single profile (7 steps including crypto setup).
+// RunProfileWizard runs the profile editor for a single profile.
 // existing is nil when creating a new profile.
 // Returns the completed ProfileConfig, or (nil, true, nil) if aborted.
 func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*config.ProfileConfig, bool, error) {
@@ -189,7 +189,6 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 	nvim := discovery.DiscoverNvim()
 	shell := discovery.DiscoverShell()
 	cliTools := discovery.DiscoverCLITools()
-	configs := discovery.KnownConfigs()
 	allLangs := registryAllFunc()
 
 	// Step 1: Languages
@@ -246,42 +245,12 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 		}
 	}
 
-	// Step 4: Shell & config files
+	// Step 4: Shell
 	if shell.Type != "" {
-		// apply shell discovery to lock file shell section
-		// (shell config is global, not per-profile — wizard caller handles it)
 		prof.IncludeShell = true
 	}
-	{
-		cfgItems := configItemsForProfile(configs)
-		m := NewMultiSelect("Step 4: Config files — select configs to bundle", cfgItems)
-		p := tea.NewProgram(m)
-		final, err := p.Run()
-		if err != nil {
-			return nil, false, err
-		}
-		mm := final.(MultiSelectModel)
-		if mm.aborted {
-			return nil, true, nil
-		}
-		_ = mm // config file selection stored in LockFile.Configs (global); caller handles
-	}
 
-	// Step 5: SSH hosts
-	{
-		result, err := RunSSHHostsStep(nil) // TODO: pass existing SSH aliases when editing a profile
-		if err != nil {
-			return nil, false, err
-		}
-		if result.Aborted {
-			return nil, true, nil
-		}
-		// SSH host selection is informational here; stored as target aliases in targets.json
-		// by the caller (ferry bootstrap) — we just display it
-		_ = result
-	}
-
-	// Step 6: Size summary + confirm
+	// Step 5: Size summary + confirm
 	fmt.Println(renderSizeSummary(profileName, prof))
 	confirmed, err := ConfirmPrompt("Write ferry.lock with this profile?")
 	if err != nil {
@@ -289,25 +258,6 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 	}
 	if !confirmed {
 		return nil, true, nil
-	}
-
-	// Step 7: Secret scanning + encryption setup (global, run after all profiles)
-	hasSensitive := false
-	for _, cf := range configs {
-		if cf.Sensitive {
-			hasSensitive = true
-			break
-		}
-	}
-	if hasSensitive && !crypto.KeyExists() {
-		fmt.Println("  sensitive files detected — generating age keypair...")
-		if err := crypto.GenerateKeypair(); err != nil {
-			return nil, false, fmt.Errorf("generating keypair: %w", err)
-		}
-		fmt.Println()
-		fmt.Println(warningStyle.Render("  ⚠ important: back up your age private key"))
-		fmt.Println("    ~/.ferry/key.txt")
-		fmt.Println()
 	}
 
 	return &prof, false, nil
@@ -324,7 +274,7 @@ func pluginItems(plugins []discovery.PluginInfo, existing []string) []Item {
 	for _, p := range plugins {
 		extra := ""
 		if p.SizeBytes > 0 {
-			extra = formatBytes(p.SizeBytes)
+			extra = format.Bytes(p.SizeBytes)
 		}
 		isNew := len(existing) > 0 && !existingSet[p.Name]
 		items = append(items, Item{
@@ -357,32 +307,4 @@ func cliItemsForProfile(tools []discovery.CLITool, existing []string) []Item {
 	return items
 }
 
-func configItemsForProfile(candidates []discovery.ConfigCandidate) []Item {
-	var items []Item
-	for _, c := range candidates {
-		label := c.Path
-		if c.Sensitive {
-			label += " 🔒"
-		}
-		items = append(items, Item{
-			Label:    label,
-			Value:    c.Path,
-			Extra:    c.Reason,
-			Selected: true,
-		})
-	}
-	return items
-}
 
-func formatBytes(b int64) string {
-	const unit = 1024
-	if b < unit {
-		return fmt.Sprintf("%dB", b)
-	}
-	div, exp := int64(unit), 0
-	for n := b / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f%cB", float64(b)/float64(div), "KMGTPE"[exp])
-}

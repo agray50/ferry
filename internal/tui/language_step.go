@@ -229,13 +229,24 @@ type langConfiguratorModel struct {
 	pkgInput   string
 }
 
+// activeRuntime returns the runtime relevant to the current tier selection.
+// When the user has chosen "lsp-only" and the LSP-only runtime has its own
+// AvailableVersions (e.g. rust-analyzer, kotlin-language-server), we show
+// those versions instead of the full runtime's language versions.
+func (m langConfiguratorModel) activeRuntime() *registry.Runtime {
+	if m.tierIdx == 1 && m.lang.LSPOnlyRuntime != nil && len(m.lang.LSPOnlyRuntime.AvailableVersions) > 0 {
+		return m.lang.LSPOnlyRuntime
+	}
+	return m.lang.Runtime
+}
+
 func newLangConfiguratorModel(lang registry.Language, cfg config.LanguageConfig) langConfiguratorModel {
 	m := langConfiguratorModel{lang: lang, initial: cfg}
 	if cfg.Tier == "lsp-only" {
 		m.tierIdx = 1
 	}
-	if lang.Runtime != nil {
-		for i, v := range lang.Runtime.AvailableVersions {
+	if rt := m.activeRuntime(); rt != nil {
+		for i, v := range rt.AvailableVersions {
 			if cfg.RuntimeVersion != "" && v == cfg.RuntimeVersion {
 				m.versionIdx = i
 				break
@@ -262,7 +273,9 @@ func newLangConfiguratorModel(lang registry.Language, cfg config.LanguageConfig)
 	}
 	m.lintSel = make([]bool, len(lang.Linters))
 	for i, l := range lang.Linters {
-		m.lintSel[i] = lintSet[l] || len(cfg.Linters) == 0
+		// Linters default off — LSP covers most diagnostics interactively.
+		// Only pre-select if the user has previously chosen them.
+		m.lintSel[i] = lintSet[l]
 	}
 	m.pkgInput = strings.Join(cfg.ExtraPackages, " ")
 	return m
@@ -273,8 +286,8 @@ func (m langConfiguratorModel) result() config.LanguageConfig {
 	if m.tierIdx == 1 {
 		cfg.Tier = "lsp-only"
 	}
-	if m.lang.Runtime != nil && m.versionIdx < len(m.lang.Runtime.AvailableVersions) {
-		cfg.RuntimeVersion = m.lang.Runtime.AvailableVersions[m.versionIdx]
+	if rt := m.activeRuntime(); rt != nil && m.versionIdx < len(rt.AvailableVersions) {
+		cfg.RuntimeVersion = rt.AvailableVersions[m.versionIdx]
 	}
 	if m.lspIdx > 0 && m.lspIdx-1 < len(m.lang.AlternateLSPs) {
 		cfg.LSP = m.lang.AlternateLSPs[m.lspIdx-1].Name
@@ -334,6 +347,7 @@ func (m langConfiguratorModel) adjustFieldLeft() langConfiguratorModel {
 	case cfgFieldTier:
 		if m.tierIdx > 0 {
 			m.tierIdx--
+			m.versionIdx = 0
 		}
 	case cfgFieldVersion:
 		if m.versionIdx > 0 {
@@ -352,9 +366,10 @@ func (m langConfiguratorModel) adjustFieldRight() langConfiguratorModel {
 	case cfgFieldTier:
 		if m.tierIdx < 1 {
 			m.tierIdx++
+			m.versionIdx = 0
 		}
 	case cfgFieldVersion:
-		if m.lang.Runtime != nil && m.versionIdx < len(m.lang.Runtime.AvailableVersions)-1 {
+		if rt := m.activeRuntime(); rt != nil && m.versionIdx < len(rt.AvailableVersions)-1 {
 			m.versionIdx++
 		}
 	case cfgFieldLSP:
@@ -409,7 +424,7 @@ func (m langConfiguratorModel) View() string {
 		{"Version ", cfgFieldVersion, m.renderVersion()},
 		{"LSP     ", cfgFieldLSP, m.renderLSP()},
 		{"Formats ", cfgFieldFormatters, m.renderFormatters()},
-		{"Linters ", cfgFieldLinters, m.renderLinters()},
+		{"Linters ", cfgFieldLinters, m.renderLinters() + subtleStyle.Render("  (optional)")},
 		{"Packages", cfgFieldPackages, pkgDisplay},
 	}
 	for _, f := range fields {
@@ -423,78 +438,107 @@ func (m langConfiguratorModel) View() string {
 	return b.String()
 }
 
-func (m langConfiguratorModel) renderTier() string {
-	tiers := []string{"Full runtime", "LSP only"}
-	var parts []string
-	for i, t := range tiers {
-		if i == m.tierIdx {
-			parts = append(parts, selectedStyle.Render("❯ "+t))
+// renderSelector renders a horizontal list of options, highlighting the current one with ❯.
+func renderSelector(options []string, current int) string {
+	parts := make([]string, len(options))
+	for i, opt := range options {
+		if i == current {
+			parts[i] = selectedStyle.Render("❯ " + opt)
 		} else {
-			parts = append(parts, subtleStyle.Render(t))
+			parts[i] = subtleStyle.Render(opt)
 		}
 	}
-	return strings.Join(parts, "   ")
+	return strings.Join(parts, "  ")
+}
+
+// versionLabels converts exact version strings to display labels.
+// The first entry becomes "latest"; subsequent entries are abbreviated
+// to major.minor with a trailing ~ (e.g. "1.22.5" → "v1.22~", "22" → "v22~").
+// Named channels such as "stable", "beta", "nightly" are kept as-is.
+func versionLabels(versions []string) []string {
+	labels := make([]string, len(versions))
+	for i, v := range versions {
+		if isNamedChannel(v) {
+			labels[i] = v
+			continue
+		}
+		if i == 0 {
+			labels[i] = "latest"
+		} else {
+			labels[i] = "v" + majorMinorOf(v) + "~"
+		}
+	}
+	return labels
+}
+
+// isNamedChannel reports whether v is a word-only release channel
+// (e.g. "stable", "beta", "nightly") rather than a numeric version.
+func isNamedChannel(v string) bool {
+	for _, r := range v {
+		if r >= '0' && r <= '9' {
+			return false
+		}
+	}
+	return true
+}
+
+// majorMinorOf returns the major.minor prefix of a version string,
+// collapsing a trailing .0 minor back to just the major.
+// Examples: "1.22.5" → "1.22",  "8.0" → "8",  "22" → "22",  "0.21.3" → "0.21"
+func majorMinorOf(v string) string {
+	parts := strings.SplitN(v, ".", 3)
+	if len(parts) == 1 {
+		return parts[0]
+	}
+	if parts[1] == "0" {
+		return parts[0]
+	}
+	return parts[0] + "." + parts[1]
+}
+
+// renderCheckboxes renders a horizontal list of togglable items.
+func renderCheckboxes(labels []string, selected []bool) string {
+	if len(labels) == 0 {
+		return subtleStyle.Render("(none)")
+	}
+	parts := make([]string, len(labels))
+	for i, label := range labels {
+		if i < len(selected) && selected[i] {
+			parts[i] = selectedStyle.Render("[x] " + label)
+		} else {
+			parts[i] = subtleStyle.Render("[ ] " + label)
+		}
+	}
+	return strings.Join(parts, "  ")
+}
+
+func (m langConfiguratorModel) renderTier() string {
+	return renderSelector([]string{"Full runtime", "LSP only"}, m.tierIdx)
 }
 
 func (m langConfiguratorModel) renderVersion() string {
-	if m.lang.Runtime == nil || len(m.lang.Runtime.AvailableVersions) == 0 {
+	rt := m.activeRuntime()
+	if rt == nil || len(rt.AvailableVersions) == 0 {
 		return subtleStyle.Render("(n/a)")
 	}
-	var parts []string
-	for i, v := range m.lang.Runtime.AvailableVersions {
-		if i == m.versionIdx {
-			parts = append(parts, selectedStyle.Render("❯ "+v))
-		} else {
-			parts = append(parts, subtleStyle.Render(v))
-		}
-	}
-	return strings.Join(parts, "  ")
+	return renderSelector(versionLabels(rt.AvailableVersions), m.versionIdx)
 }
 
 func (m langConfiguratorModel) renderLSP() string {
-	options := []string{m.lang.LSP}
-	for _, alt := range m.lang.AlternateLSPs {
-		options = append(options, alt.Name)
-	}
-	var parts []string
-	for i, opt := range options {
-		if i == m.lspIdx {
-			parts = append(parts, selectedStyle.Render("❯ "+opt))
-		} else {
-			parts = append(parts, subtleStyle.Render(opt))
+	options := append([]string{m.lang.LSP}, func() []string {
+		alts := make([]string, len(m.lang.AlternateLSPs))
+		for i, a := range m.lang.AlternateLSPs {
+			alts[i] = a.Name
 		}
-	}
-	return strings.Join(parts, "  ")
+		return alts
+	}()...)
+	return renderSelector(options, m.lspIdx)
 }
 
 func (m langConfiguratorModel) renderFormatters() string {
-	if len(m.lang.Formatters) == 0 {
-		return subtleStyle.Render("(none)")
-	}
-	var parts []string
-	for i, f := range m.lang.Formatters {
-		sel := i < len(m.fmtSel) && m.fmtSel[i]
-		if sel {
-			parts = append(parts, selectedStyle.Render("[x] "+f))
-		} else {
-			parts = append(parts, subtleStyle.Render("[ ] "+f))
-		}
-	}
-	return strings.Join(parts, "  ")
+	return renderCheckboxes(m.lang.Formatters, m.fmtSel)
 }
 
 func (m langConfiguratorModel) renderLinters() string {
-	if len(m.lang.Linters) == 0 {
-		return subtleStyle.Render("(none)")
-	}
-	var parts []string
-	for i, l := range m.lang.Linters {
-		sel := i < len(m.lintSel) && m.lintSel[i]
-		if sel {
-			parts = append(parts, selectedStyle.Render("[x] "+l))
-		} else {
-			parts = append(parts, subtleStyle.Render("[ ] "+l))
-		}
-	}
-	return strings.Join(parts, "  ")
+	return renderCheckboxes(m.lang.Linters, m.lintSel)
 }

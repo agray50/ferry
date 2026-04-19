@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/anthropics/ferry/internal/format"
 	"github.com/anthropics/ferry/internal/store"
 )
 
@@ -136,7 +137,7 @@ func (m UpdateReviewModel) View() string {
 			checkbox = selectedStyle.Render("◉")
 		}
 
-		sizeStr := formatSizeItem(c.SizeCompressed)
+		sizeStr := format.Bytes(c.SizeCompressed)
 		if c.SizeCompressed > 50*1024*1024 {
 			sizeStr = largeStyle.Render(sizeStr + " (!)")
 		}
@@ -167,7 +168,7 @@ func (m UpdateReviewModel) View() string {
 		}
 	}
 	b.WriteString(fmt.Sprintf("\n  selected: %s   skipped: %s\n",
-		formatSizeItem(selectedSize), formatSizeItem(skippedSize)))
+		format.Bytes(selectedSize), format.Bytes(skippedSize)))
 
 	b.WriteString(subtleStyle.Render("\n  / filter   space toggle   enter confirm   esc cancel\n"))
 	return b.String()
@@ -184,12 +185,3 @@ func (m UpdateReviewModel) SelectedComponents() []store.Component {
 	return out
 }
 
-func formatSizeItem(b int64) string {
-	if b < 1024 {
-		return fmt.Sprintf("%dB", b)
-	}
-	if b < 1024*1024 {
-		return fmt.Sprintf("%.0fKB", float64(b)/1024)
-	}
-	return fmt.Sprintf("%.1fMB", float64(b)/1024/1024)
-}

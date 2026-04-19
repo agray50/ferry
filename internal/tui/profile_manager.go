@@ -246,6 +246,7 @@ func RunProfileManager(lf *config.LockFile, readOnly bool) (*ProfileManagerResul
 }
 
 // RenderProfileTable returns a static (non-interactive) string of the profile × targets view.
+// Reuses the interactive View() with readOnly=true, then swaps the title line.
 func RenderProfileTable(lf *config.LockFile) (string, error) {
 	targets, err := config.ReadTargets()
 	if err != nil {
@@ -256,40 +257,9 @@ func RenderProfileTable(lf *config.LockFile) (string, error) {
 	if lhash != "" {
 		localHash = &lhash
 	}
-
-	rows := buildProfileRows(lf, targets, localHash)
-
-	var b strings.Builder
-	b.WriteString("⛴  ferry ls\n\n")
-	b.WriteString(fmt.Sprintf("  %-16s %-40s %s\n", "PROFILE", "LANGUAGES", "TARGETS"))
-	b.WriteString("  " + strings.Repeat("─", 80) + "\n")
-
-	for _, row := range rows {
-		langCol := row.LanguageSummary
-		if len(langCol) > 38 {
-			langCol = langCol[:35] + "..."
-		}
-		if len(row.Targets) == 0 {
-			b.WriteString(fmt.Sprintf("  %-16s %-40s %s\n",
-				row.Name, langCol, "(no targets)"))
-		} else {
-			for j, tr := range row.Targets {
-				tgtStr := fmt.Sprintf("%-20s  %s", tr.Host, tr.Status)
-				if j == 0 {
-					b.WriteString(fmt.Sprintf("  %-16s %-40s %s\n",
-						row.Name, langCol, tgtStr))
-				} else {
-					b.WriteString(fmt.Sprintf("  %-16s %-40s %s\n",
-						"", "", tgtStr))
-				}
-			}
-		}
-	}
-
-	if len(rows) == 0 {
-		b.WriteString("  (no profiles — run: ferry init)\n")
-	}
-	return b.String(), nil
+	m := newProfileManagerModel(lf, targets, localHash, nil, true)
+	out := strings.Replace(m.View(), "⛴  ferry", "⛴  ferry ls", 1)
+	return out, nil
 }
 
 // Local lipgloss styles for status coloring.

@@ -86,7 +86,7 @@ func (m MultiSelectModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.done = true
 			return m, tea.Quit
 		case "esc":
-			m.done = true
+			m.aborted = true
 			return m, tea.Quit
 		}
 	}

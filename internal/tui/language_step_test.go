@@ -122,6 +122,37 @@ func TestLangConfiguratorModel_result(t *testing.T) {
 	}
 }
 
+func TestVersionLabels(t *testing.T) {
+	cases := []struct {
+		versions []string
+		want     []string
+	}{
+		// Numeric semver: first → "latest", rest → major.minor~
+		{[]string{"3.12", "3.11", "3.10"}, []string{"latest", "v3.11~", "v3.10~"}},
+		{[]string{"1.22.5", "1.21.11", "1.20.14"}, []string{"latest", "v1.21~", "v1.20~"}},
+		{[]string{"22", "20", "18"}, []string{"latest", "v20~", "v18~"}},
+		{[]string{"21", "17", "11"}, []string{"latest", "v17~", "v11~"}},
+		// Minor == 0: collapse to major only
+		{[]string{"8.0", "7.0", "6.0"}, []string{"latest", "v7~", "v6~"}},
+		// Named channels kept as-is (no "latest" substitution)
+		{[]string{"stable", "beta", "nightly"}, []string{"stable", "beta", "nightly"}},
+		// Single entry
+		{[]string{"0.14.0"}, []string{"latest"}},
+	}
+	for _, tc := range cases {
+		got := versionLabels(tc.versions)
+		if len(got) != len(tc.want) {
+			t.Errorf("versionLabels(%v) len=%d, want %d", tc.versions, len(got), len(tc.want))
+			continue
+		}
+		for i := range got {
+			if got[i] != tc.want[i] {
+				t.Errorf("versionLabels(%v)[%d] = %q, want %q", tc.versions, i, got[i], tc.want[i])
+			}
+		}
+	}
+}
+
 func TestNewLangListModel_prePopulatesExisting(t *testing.T) {
 	langs := []registry.Language{
 		{Name: "go", ApproxSizeMB: 130},
