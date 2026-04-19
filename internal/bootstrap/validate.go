@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/anthropics/ferry/internal/config"
 	"github.com/anthropics/ferry/internal/ssh"
 	"github.com/anthropics/ferry/internal/store"
 )
@@ -66,35 +67,18 @@ func validateComponent(c *ssh.Client, comp store.Component) ValidationItem {
 		item.Version = strings.TrimSpace(stdout)
 
 	case strings.HasPrefix(comp.ID, "cli/"):
+		// CLI tools land in ~/.local/bin/; check by full path rather than via
+		// PATH since the SSH session may not source the user's shell RC.
 		binary := strings.TrimPrefix(comp.ID, "cli/")
-		stdout, _, code, err := c.Run(fmt.Sprintf("which %s && %s --version 2>&1 | head -1", binary, binary))
+		fullPath := "$HOME/.local/bin/" + binary
+		stdout, _, code, err := c.Run(fmt.Sprintf("[ -x %s ] && %s --version 2>&1 | head -1", fullPath, fullPath))
 		if err != nil || code != 0 {
 			item.Status = "warning"
-			item.Message = fmt.Sprintf("%s not found (system requirement)", binary)
+			item.Message = fmt.Sprintf("%s not found in ~/.local/bin/", binary)
 			return item
 		}
 		item.Status = "ok"
 		item.Version = strings.TrimSpace(stdout)
-
-	case strings.HasPrefix(comp.ID, "runtime/python"):
-		stdout, _, code, err := c.Run("$HOME/.pyenv/bin/python --version 2>&1")
-		if err != nil || code != 0 {
-			item.Status = "error"
-			item.Message = "python runtime not found"
-			return item
-		}
-		item.Status = "ok"
-		item.Version = strings.TrimSpace(stdout) + " via pyenv"
-
-	case strings.HasPrefix(comp.ID, "runtime/node"):
-		stdout, _, code, err := c.Run(". $HOME/.nvm/nvm.sh && node --version 2>&1")
-		if err != nil || code != 0 {
-			item.Status = "error"
-			item.Message = "node runtime not found"
-			return item
-		}
-		item.Status = "ok"
-		item.Version = strings.TrimSpace(stdout) + " via nvm"
 
 	case strings.HasPrefix(comp.ID, "lazy/"):
 		pluginName := strings.TrimPrefix(comp.ID, "lazy/")
@@ -108,7 +92,7 @@ func validateComponent(c *ssh.Client, comp store.Component) ValidationItem {
 		item.Version = "installed"
 
 	default:
-		exists, err := c.FileExists(comp.InstallPath)
+		exists, err := c.FileExists(config.ExpandHome(comp.InstallPath))
 		if err != nil || !exists {
 			item.Status = "warning"
 			item.Message = "install path missing"

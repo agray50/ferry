@@ -2,19 +2,19 @@ package cmd
 
 import (
 	"bufio"
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/spf13/cobra"
 
 	"github.com/anthropics/ferry/internal/bootstrap"
 	"github.com/anthropics/ferry/internal/config"
-	"github.com/anthropics/ferry/internal/crypto"
+	"github.com/anthropics/ferry/internal/format"
+	"github.com/anthropics/ferry/internal/registry"
 	"github.com/anthropics/ferry/internal/ssh"
 	"github.com/anthropics/ferry/internal/store"
 )
@@ -71,11 +71,11 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	needed := bundleSize * 2
 	if env.DiskFree < needed {
 		fmt.Printf("  ✗ insufficient disk space: %s available, need %s\n",
-			formatBytes(env.DiskFree), formatBytes(needed))
+			format.Bytes(env.DiskFree), format.Bytes(needed))
 		return fmt.Errorf("insufficient disk space")
 	}
 	fmt.Printf("  ✓ disk space: %s available (need ~%s)\n",
-		formatBytes(env.DiskFree), formatBytes(needed))
+		format.Bytes(env.DiskFree), format.Bytes(needed))
 
 	// Zsh version check — actually compare versions
 	lock, err := config.ReadLockFile()
@@ -117,7 +117,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	fmt.Printf("\nready to bootstrap %s\n\n", target)
 	fmt.Printf("  profile:  %s\n", profile)
 	fmt.Printf("  arch:     %s-%s\n", env.Arch, env.Libc)
-	fmt.Printf("  bundle:   %s (%d components)\n", formatBytes(bundleSize), len(manifest.Components))
+	fmt.Printf("  bundle:   %s (%d components)\n", format.Bytes(bundleSize), len(manifest.Components))
 	fmt.Printf("\n  estimated transfer time:\n")
 	fmt.Printf("    10 Mbps upload:  ~%s\n", estimateTime(bundleSize, 10))
 	fmt.Printf("    50 Mbps upload:  ~%s\n", estimateTime(bundleSize, 50))
@@ -146,7 +146,7 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	fmt.Printf("\nshipping %d components (%s)...\n", len(manifest.Components), formatBytes(bundleSize))
+	fmt.Printf("\nshipping %d components (%s)...\n", len(manifest.Components), format.Bytes(bundleSize))
 	var shipped int64
 	for i, comp := range manifest.Components {
 		data, err := s.Get(comp.Hash)
@@ -154,11 +154,13 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 			return fmt.Errorf("reading component %s: %w", comp.ID, err)
 		}
 		remotePath := fmt.Sprintf("$HOME/.ferry/store/%s.tar.zst", comp.Hash)
+		var prev int64
 		err = c.StreamUpload(data, remotePath, func(written int64) {
-			shipped += written
+			shipped += written - prev
+			prev = written
 			pct := float64(shipped) / float64(bundleSize) * 100
 			fmt.Printf("\r  [%3.0f%%] %d/%d components  %s",
-				pct, i+1, len(manifest.Components), formatBytes(shipped))
+				pct, i+1, len(manifest.Components), format.Bytes(shipped))
 		})
 		if err != nil {
 			return fmt.Errorf("uploading component %s: %w", comp.ID, err)
@@ -166,13 +168,33 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Println()
 
+	// Resolve languages for this profile so plugin/ferry.lua and lua/ferry.lua
+	// are populated with the correct LSP server and treesitter parser lists,
+	// and so env.sh contains the correct runtime PATH entries.
+	tools, err := config.LoadToolsFile()
+	if err != nil {
+		return fmt.Errorf("loading tools file: %w", err)
+	}
+	var langs []registry.ResolvedLanguage
+	if prof, ok := lock.Profiles[profile]; ok && len(prof.Languages) > 0 {
+		if resolved, resolveErr := registry.ResolveFromProfile(prof.Languages, tools); resolveErr == nil {
+			langs = resolved
+		}
+	}
+
 	// Generate and upload install.sh
-	script, err := bootstrap.GenerateInstallScript(manifest, lock, nil)
+	script, err := bootstrap.GenerateInstallScript(manifest, lock, langs)
 	if err != nil {
 		return err
 	}
 	if err := c.UploadBytes([]byte(script), "$HOME/.ferry/install.sh", 0755); err != nil {
 		return fmt.Errorf("uploading install.sh: %w", err)
+	}
+
+	// Upload env.sh (runtime PATH entries) to incoming/ — install.sh copies it into place.
+	envSh := bootstrap.GenerateEnvSh(langs)
+	if err := c.UploadBytes([]byte(envSh), "$HOME/.ferry/incoming/env.sh", 0644); err != nil {
+		return fmt.Errorf("uploading env.sh: %w", err)
 	}
 
 	// Upload manifest to incoming/
@@ -184,10 +206,8 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("uploading manifest: %w", err)
 	}
 
-	// Run install.sh — age key delivered via stdin, never exposed in process listing.
 	fmt.Printf("\nrunning install.sh on target...\n")
-	stdinData := buildInstallStdin(manifest)
-	stdout, stderr, code, err := c.RunWithStdin("sh $HOME/.ferry/install.sh", stdinData)
+	stdout, stderr, code, err := c.RunWithStdin("sh $HOME/.ferry/install.sh", []byte("\n"))
 	if err != nil || code != 0 {
 		fmt.Printf("  install.sh failed (exit %d):\n%s\n%s\n", code, stdout, stderr)
 		return fmt.Errorf("install.sh failed")
@@ -216,62 +236,23 @@ func runBootstrap(cmd *cobra.Command, args []string) error {
 	}
 
 	fmt.Printf("\nbootstrap complete ✓\n")
-	fmt.Printf("connect with: ferry connect %s\n", target)
+	fmt.Printf("connect with: ssh %s\n", target)
 	return nil
-}
-
-// buildInstallStdin constructs the data to pipe to install.sh via stdin.
-// The first line is the age private key when encrypted components are present,
-// or a blank line otherwise (so the install.sh read command does not block).
-func buildInstallStdin(manifest *store.Manifest) []byte {
-	for _, comp := range manifest.Components {
-		if comp.Encrypted {
-			if crypto.KeyExists() {
-				keyData, err := os.ReadFile(config.KeyFile())
-				if err == nil {
-					return append(bytes.TrimSpace(keyData), '\n')
-				}
-			}
-			break
-		}
-	}
-	// No encrypted components (or key unavailable) — send blank line.
-	return []byte("\n")
 }
 
 // zshVersionOK returns true if have >= need (e.g. "5.9" >= "5.8").
 func zshVersionOK(have, need string) (bool, error) {
-	haveParts := strings.SplitN(have, ".", 3)
-	needParts := strings.SplitN(need, ".", 3)
-	for len(haveParts) < 3 {
-		haveParts = append(haveParts, "0")
+	h, err := semver.NewVersion(have)
+	if err != nil {
+		return false, fmt.Errorf("unparseable zsh version %q: %w", have, err)
 	}
-	for len(needParts) < 3 {
-		needParts = append(needParts, "0")
+	n, err := semver.NewVersion(need)
+	if err != nil {
+		return false, fmt.Errorf("unparseable required version %q: %w", need, err)
 	}
-	for i := 0; i < 3; i++ {
-		h, err1 := strconv.Atoi(haveParts[i])
-		n, err2 := strconv.Atoi(needParts[i])
-		if err1 != nil || err2 != nil {
-			return false, fmt.Errorf("unparseable version component")
-		}
-		if h > n {
-			return true, nil
-		}
-		if h < n {
-			return false, nil
-		}
-	}
-	return true, nil // equal
+	return h.GreaterThanEqual(n), nil
 }
 
-func formatBytes(b int64) string {
-	const unit = 1024 * 1024
-	if b < unit {
-		return fmt.Sprintf("%dKB", b/1024)
-	}
-	return fmt.Sprintf("%.0fMB", float64(b)/float64(unit))
-}
 
 func estimateTime(bytes int64, mbps int) string {
 	// mbps is megabits per second; 1 Mbps = 1,000,000 bits/s
