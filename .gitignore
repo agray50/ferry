@@ -1,1 +1,4 @@
 .worktrees/
+ferry
+ferry.lock
+*.md
