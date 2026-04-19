@@ -2,6 +2,7 @@ package discovery
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -42,7 +43,7 @@ func ParseSSHConfig() ([]SSHHost, error) {
 	}
 	f, err := os.Open(path)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("opening ssh config: %w", err)
@@ -153,7 +154,7 @@ func RemoveSSHHost(alias string) error {
 		return err
 	}
 	data, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
+	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
@@ -214,6 +215,8 @@ func RemoveSSHHost(alias string) error {
 		blockEnd++
 	}
 
-	result := append(lines[:blockStart], lines[blockEnd:]...)
+	result := make([]string, 0, len(lines)-(blockEnd-blockStart))
+	result = append(result, lines[:blockStart]...)
+	result = append(result, lines[blockEnd:]...)
 	return os.WriteFile(path, []byte(strings.Join(result, "\n")), 0600)
 }

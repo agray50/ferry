@@ -36,8 +36,11 @@ func DiscoverLanguages() []LanguageDiscovery {
 			d.LSPFound = lang.LSP
 			d.Tools = append(d.Tools, probeTool(lang.LSP, path, "direct"))
 		}
-		// check formatters and linters
-		allTools := append(lang.Formatters, lang.Linters...)
+		// check formatters and linters — allocate a new slice to avoid mutating
+		// lang.Formatters' backing array if it has spare capacity.
+		allTools := make([]string, 0, len(lang.Formatters)+len(lang.Linters))
+		allTools = append(allTools, lang.Formatters...)
+		allTools = append(allTools, lang.Linters...)
 		for _, tool := range allTools {
 			if path, err := exec.LookPath(tool); err == nil {
 				d.Tools = append(d.Tools, probeTool(tool, path, "system"))

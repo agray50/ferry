@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -39,12 +40,23 @@ func CompressDir(dir string, excludePatterns []string) ([]byte, error) {
 			return nil
 		}
 
-		info, err := d.Info()
+		// Use Lstat so we get info about the symlink itself, not its target.
+		// d.Info() follows symlinks via WalkDir and would never report ModeSymlink.
+		info, err := os.Lstat(path)
 		if err != nil {
 			return err
 		}
 
-		hdr, err := tar.FileInfoHeader(info, "")
+		// Resolve symlink target for proper tar header construction.
+		linkTarget := ""
+		if info.Mode()&os.ModeSymlink != 0 {
+			linkTarget, err = os.Readlink(path)
+			if err != nil {
+				return err
+			}
+		}
+
+		hdr, err := tar.FileInfoHeader(info, linkTarget)
 		if err != nil {
 			return err
 		}
@@ -56,7 +68,8 @@ func CompressDir(dir string, excludePatterns []string) ([]byte, error) {
 		if err := tw.WriteHeader(hdr); err != nil {
 			return err
 		}
-		if d.IsDir() {
+		// Symlinks and directories have no data payload.
+		if info.Mode()&os.ModeSymlink != 0 || d.IsDir() {
 			return nil
 		}
 
@@ -125,10 +138,27 @@ func ExtractTo(data []byte, dest string) error {
 			return fmt.Errorf("ExtractTo: %w", err)
 		}
 
-		target := filepath.Join(dest, filepath.Clean(hdr.Name))
+		target, err := safeJoin(dest, hdr.Name)
+		if err != nil {
+			continue // skip path-traversal attempt
+		}
 		switch hdr.Typeflag {
 		case tar.TypeDir:
 			if err := os.MkdirAll(target, fs.FileMode(hdr.Mode)); err != nil {
+				return err
+			}
+		case tar.TypeSymlink:
+			// Validate that the resolved symlink target stays within dest.
+			resolved := filepath.Join(filepath.Dir(target), hdr.Linkname)
+			if rel, err := filepath.Rel(dest, resolved); err != nil || strings.HasPrefix(rel, "..") {
+				continue // symlink would escape dest
+			}
+			if err := os.MkdirAll(filepath.Dir(target), 0755); err != nil {
+				return err
+			}
+			// Remove existing file/symlink at target before creating new symlink.
+			_ = os.Remove(target)
+			if err := os.Symlink(hdr.Linkname, target); err != nil {
 				return err
 			}
 		case tar.TypeReg:
@@ -147,4 +177,15 @@ func ExtractTo(data []byte, dest string) error {
 		}
 	}
 	return nil
+}
+
+// safeJoin joins dest and name and returns an error if the result escapes dest.
+// Prevents tar-slip path traversal attacks.
+func safeJoin(dest, name string) (string, error) {
+	target := filepath.Join(dest, name)
+	rel, err := filepath.Rel(dest, target)
+	if err != nil || strings.HasPrefix(rel, "..") {
+		return "", fmt.Errorf("archive entry %q would escape destination", name)
+	}
+	return target, nil
 }

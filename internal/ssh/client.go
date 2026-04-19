@@ -22,16 +22,15 @@ type Client struct {
 	user        string
 	conn        *ssh.Client
 	agentClient agent.ExtendedAgent
+	agentConn   net.Conn // underlying unix socket; closed in Close()
 	done        chan struct{}
 }
 
-func buildAuthMethods() ([]ssh.AuthMethod, agent.ExtendedAgent) {
-	var methods []ssh.AuthMethod
-	var agentClient agent.ExtendedAgent
-
-	// SSH agent
+func buildAuthMethods() (methods []ssh.AuthMethod, agentClient agent.ExtendedAgent, agentConn net.Conn) {
+	// SSH agent — agentConn must be closed by the caller (stored on Client, closed in Close()).
 	if sock := os.Getenv("SSH_AUTH_SOCK"); sock != "" {
 		if conn, err := net.Dial("unix", sock); err == nil {
+			agentConn = conn
 			agentClient = agent.NewClient(conn)
 			methods = append(methods, ssh.PublicKeysCallback(agentClient.Signers))
 		}
@@ -48,7 +47,7 @@ func buildAuthMethods() ([]ssh.AuthMethod, agent.ExtendedAgent) {
 		}
 	}
 
-	return methods, agentClient
+	return
 }
 
 func buildHostKeyCallback(host string) (ssh.HostKeyCallback, error) {
@@ -57,7 +56,7 @@ func buildHostKeyCallback(host string) (ssh.HostKeyCallback, error) {
 
 	cb, err := knownhosts.New(khPath)
 	if err != nil {
-		if os.IsNotExist(err) {
+		if errors.Is(err, os.ErrNotExist) {
 			return nil, fmt.Errorf(
 				"~/.ssh/known_hosts not found\n  add host key first:\n  ssh-keyscan -H %s >> ~/.ssh/known_hosts",
 				host,
@@ -87,10 +86,13 @@ func dial(target string, agentForward bool) (*Client, error) {
 		return nil, err
 	}
 
-	methods, agentClient := buildAuthMethods()
+	methods, agentClient, agentConn := buildAuthMethods()
 
 	cb, err := buildHostKeyCallback(pt.Host)
 	if err != nil {
+		if agentConn != nil {
+			agentConn.Close()
+		}
 		return nil, err
 	}
 
@@ -103,14 +105,18 @@ func dial(target string, agentForward bool) (*Client, error) {
 
 	conn, err := ssh.Dial("tcp", pt.Addr(), cfg)
 	if err != nil {
+		if agentConn != nil {
+			agentConn.Close()
+		}
 		return nil, fmt.Errorf("SSH dial %s: %w", pt.Addr(), err)
 	}
 
 	c := &Client{
-		host: pt.String(),
-		user: pt.User,
-		conn: conn,
-		done: make(chan struct{}),
+		host:      pt.String(),
+		user:      pt.User,
+		conn:      conn,
+		agentConn: agentConn,
+		done:      make(chan struct{}),
 	}
 
 	if agentForward && agentClient != nil {
@@ -151,6 +157,9 @@ func ConnectWithAgent(target string) (*Client, error) {
 // Close closes the SSH connection and stops background goroutines.
 func (c *Client) Close() error {
 	close(c.done)
+	if c.agentConn != nil {
+		c.agentConn.Close()
+	}
 	return c.conn.Close()
 }
 
@@ -299,7 +308,7 @@ func (c *Client) UploadBytes(data []byte, remotePath string, mode os.FileMode) e
 	filename := filepath.Base(remotePath)
 	dir := filepath.Dir(remotePath)
 
-	if err := sess.Start(fmt.Sprintf("scp -qt %s", shellQuote(dir))); err != nil {
+	if err := sess.Start(fmt.Sprintf("scp -qt %s", shellQuoteExpand(dir))); err != nil {
 		return fmt.Errorf("UploadBytes scp start: %w", err)
 	}
 
@@ -319,8 +328,8 @@ func (c *Client) UploadBytes(data []byte, remotePath string, mode os.FileMode) e
 	if err := readACK(); err != nil {
 		return err
 	}
-	// 2. Send file header
-	if _, err := fmt.Fprintf(stdinPipe, "C%04o %d %s\n", mode, len(data), filename); err != nil {
+	// 2. Send file header — use Perm() to strip file-type bits (SCP expects 4 octal digits).
+	if _, err := fmt.Fprintf(stdinPipe, "C%04o %d %s\n", mode.Perm(), len(data), filename); err != nil {
 		return err
 	}
 	// 3. ACK for header
@@ -356,7 +365,7 @@ func (c *Client) Download(remotePath string, localPath string) error {
 // DownloadBytes reads a remote file and returns its contents.
 // Returns error if the file does not exist.
 func (c *Client) DownloadBytes(remotePath string) ([]byte, error) {
-	stdout, _, code, err := c.Run(fmt.Sprintf("cat %s", shellQuote(remotePath)))
+	stdout, _, code, err := c.Run(fmt.Sprintf("cat %s", ShellQuote(remotePath)))
 	if err != nil {
 		return nil, err
 	}
@@ -368,7 +377,7 @@ func (c *Client) DownloadBytes(remotePath string) ([]byte, error) {
 
 // FileExists returns true if a path exists on the remote host.
 func (c *Client) FileExists(remotePath string) (bool, error) {
-	_, _, code, err := c.Run(fmt.Sprintf("test -e %s", shellQuote(remotePath)))
+	_, _, code, err := c.Run(fmt.Sprintf("test -e %s", ShellQuote(remotePath)))
 	if err != nil {
 		return false, err
 	}
@@ -376,8 +385,9 @@ func (c *Client) FileExists(remotePath string) (bool, error) {
 }
 
 // MkdirAll creates a directory and all parents on the remote host.
+// Uses shellQuoteExpand so that $HOME in remotePath is expanded by the remote shell.
 func (c *Client) MkdirAll(remotePath string) error {
-	_, _, _, err := c.Run(fmt.Sprintf("mkdir -p %s", shellQuote(remotePath)))
+	_, _, _, err := c.Run(fmt.Sprintf("mkdir -p %s", shellQuoteExpand(remotePath)))
 	return err
 }
 
@@ -399,7 +409,7 @@ func (c *Client) StreamUpload(data []byte, remotePath string, onProgress func(wr
 		return err
 	}
 
-	if err := sess.Start(fmt.Sprintf("cat > %s", shellQuote(remotePath))); err != nil {
+	if err := sess.Start(fmt.Sprintf("cat > %s", shellQuoteExpand(remotePath))); err != nil {
 		return err
 	}
 
@@ -447,6 +457,21 @@ func Ping(target string) error {
 	return nil
 }
 
-func shellQuote(s string) string {
+// ShellQuote wraps s in single quotes, escaping any embedded single quotes.
+// Use for literal values where shell variable expansion must NOT occur
+// (e.g. filenames passed to cat/test/rm).
+func ShellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'"
+}
+
+// shellQuoteExpand wraps s in double quotes, escaping $, `, \, and " so that
+// shell variable expansion (e.g. $HOME) is preserved while other special
+// characters are neutralised. Use for remote paths that intentionally contain
+// $HOME or other environment variable references.
+func shellQuoteExpand(s string) string {
+	s = strings.ReplaceAll(s, `\`, `\\`)
+	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "`", "\\`")
+	// Do NOT escape $ — that is the expansion we want to preserve.
+	return `"` + s + `"`
 }

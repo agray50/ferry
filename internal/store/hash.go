@@ -33,45 +33,43 @@ func HashFile(path string) (string, error) {
 }
 
 // HashDir returns the SHA256 hex string of a directory's contents.
-// Hash is computed over all file paths and their contents, sorted.
+// Hash is computed over all file paths and their contents, sorted by path.
+// Files are streamed one at a time rather than loaded all into memory.
 // Excludes patterns matching any entry in excludePatterns (glob).
 func HashDir(path string, excludePatterns []string) (string, error) {
 	globs := compileGlobs(excludePatterns)
 
-	type entry struct {
-		rel  string
-		data []byte
-	}
-	var entries []entry
-
+	// Collect relative paths first so we can sort before hashing.
+	var paths []string
 	err := filepath.WalkDir(path, func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		rel, _ := filepath.Rel(path, p)
-		if d.IsDir() {
+		if d.IsDir() || matchesAny(rel, globs) {
 			return nil
 		}
-		if matchesAny(rel, globs) {
-			return nil
-		}
-		data, err := os.ReadFile(p)
-		if err != nil {
-			return err
-		}
-		entries = append(entries, entry{rel: rel, data: data})
+		paths = append(paths, rel)
 		return nil
 	})
 	if err != nil {
 		return "", err
 	}
 
-	sort.Slice(entries, func(i, j int) bool { return entries[i].rel < entries[j].rel })
+	sort.Strings(paths)
 
 	h := sha256.New()
-	for _, e := range entries {
-		fmt.Fprintf(h, "%s\x00", e.rel)
-		h.Write(e.data)
+	for _, rel := range paths {
+		fmt.Fprintf(h, "%s\x00", rel)
+		f, err := os.Open(filepath.Join(path, rel))
+		if err != nil {
+			return "", err
+		}
+		_, copyErr := io.Copy(h, f)
+		f.Close()
+		if copyErr != nil {
+			return "", copyErr
+		}
 		h.Write([]byte{0})
 	}
 	return fmt.Sprintf("%x", h.Sum(nil)), nil
