@@ -19,8 +19,12 @@ type RemoteEnv struct {
 // DetectRemoteEnv runs detection commands over SSH and returns results.
 func DetectRemoteEnv(c *Client) (RemoteEnv, error) {
 	script := `
+echo "OS=$(uname -s)"
 echo "ARCH=$(uname -m)"
-echo "LIBC=$(ldd --version 2>&1 | head -1)"
+case "$(uname -s)" in
+  Darwin) echo "LIBC=" ;;
+  *)      echo "LIBC=$(ldd --version 2>&1 | head -1)" ;;
+esac
 echo "DISKFREE=$(df -k "$HOME" 2>/dev/null | tail -1 | awk '{print $4}')"
 echo "ZSH=$(zsh --version 2>/dev/null | head -1)"
 for pkg in git curl tmux zsh; do
@@ -35,7 +39,7 @@ done
 		return RemoteEnv{}, fmt.Errorf("DetectRemoteEnv: non-zero exit %d", code)
 	}
 
-	env := RemoteEnv{OS: "linux"}
+	env := RemoteEnv{}
 	for _, line := range strings.Split(stdout, "\n") {
 		line = strings.TrimSpace(line)
 		if line == "" {
@@ -46,10 +50,19 @@ done
 			continue
 		}
 		switch k {
+		case "OS":
+			switch strings.TrimSpace(v) {
+			case "Darwin":
+				env.OS = "darwin"
+			default:
+				env.OS = "linux"
+			}
 		case "ARCH":
 			env.Arch = normaliseArch(v)
 		case "LIBC":
-			env.Libc = detectLibc(v)
+			if raw := strings.TrimSpace(v); raw != "" {
+				env.Libc = detectLibc(raw)
+			}
 		case "DISKFREE":
 			kb, _ := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
 			env.DiskFree = kb * 1024
