@@ -60,15 +60,15 @@ func Presets() []Preset {
 		},
 		{
 			Name:        "data",
-			Description: "Python · R (LSP only)",
-			EstimatedMB: 480,
+			Description: "Python · Go for data pipelines",
+			EstimatedMB: 280,
 			Profile: config.ProfileConfig{
-				Description:  "data science",
+				Description:  "data science / pipelines",
 				IncludeShell: true,
-				CLI:          []string{"rg", "jq"},
+				CLI:          []string{"rg", "jq", "yq"},
 				Languages: []config.LanguageConfig{
 					{Name: "python", Tier: "full"},
-					{Name: "r", Tier: "lsp-only"},
+					{Name: "go", Tier: "full"},
 				},
 			},
 		},

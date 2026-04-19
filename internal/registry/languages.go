@@ -1,5 +1,27 @@
 package registry
 
+// llvmRuntime is the shared LLVM/Clang toolchain used by both "c" and "cpp".
+// Both languages install the same LLVM release; the Manager "llvm" ensures
+// they deduplicate against each other (but not against unrelated "direct"
+// languages like Java) when both are selected in a profile.
+var llvmRuntime = &Runtime{
+	Manager:           "llvm",
+	DefaultVersion:    "17",
+	AvailableVersions: []string{"17", "16", "15"},
+	BuildSteps: []BuildStep{
+		{Kind: "run", Value: `curl -fsSL https://github.com/llvm/llvm-project/releases/download/llvmorg-{VERSION}.0.6/clang+llvm-{VERSION}.0.6-{ARCH_NATIVE}-linux-gnu-ubuntu-22.04.tar.xz -o /tmp/llvm.tar.xz && mkdir -p /opt/llvm && tar -xJf /tmp/llvm.tar.xz --strip-components=1 -C /opt/llvm && rm /tmp/llvm.tar.xz`},
+		{Kind: "env", Value: `PATH=/opt/llvm/bin:$PATH`},
+	},
+	ContainerPaths: []ContainerPath{
+		{Container: "/opt/llvm/", InstallPath: "~/.ferry/runtimes/llvm-{VERSION}/"},
+	},
+	MacOSDownloads: []MacOSDownload{
+		{URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-{VERSION}.0.6/clang+llvm-{VERSION}.0.6-{ARCH}-apple-darwin22.0.tar.xz", Arch: "x86_64", ArchiveRoot: "clang+llvm-{VERSION}.0.6-x86_64-apple-darwin22.0/", InstallPath: "~/.ferry/runtimes/llvm-{VERSION}/"},
+		{URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-{VERSION}.0.6/clang+llvm-{VERSION}.0.6-arm64-apple-darwin22.0.tar.xz", Arch: "arm64", ArchiveRoot: "clang+llvm-{VERSION}.0.6-arm64-apple-darwin22.0/", InstallPath: "~/.ferry/runtimes/llvm-{VERSION}/"},
+	},
+	ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/llvm-{VERSION}/bin:$PATH"`},
+}
+
 // languageRegistry is the source-of-truth map of all supported languages.
 // Add new languages here; no other file needs to change.
 var languageRegistry = map[string]Language{
@@ -15,8 +37,10 @@ var languageRegistry = map[string]Language{
 				},
 			},
 		},
-		Formatters:      []string{"black", "isort"},
-		Linters:         []string{"flake8", "mypy"},
+		// ruff is the dominant Python formatter and linter (replaces black+isort+flake8).
+		// black and isort remain as alternatives for teams that prefer them.
+		Formatters:      []string{"ruff", "black", "isort"},
+		Linters:         []string{"ruff", "mypy"},
 		ApproxSizeMB:    150,
 		ApproxLSPOnlyMB: 25,
 		MacOSSupported:  true,
@@ -28,8 +52,16 @@ var languageRegistry = map[string]Language{
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `curl https://pyenv.run | bash`},
 				{Kind: "env", Value: `PATH=/root/.pyenv/bin:/root/.pyenv/shims:$PATH`},
-				{Kind: "run", Value: `pyenv install {VERSION} && pyenv global {VERSION}`},
-				{Kind: "run", Value: `pip install black isort flake8 mypy`},
+				{Kind: "run", Value: `pyenv install {VERSION} && pyenv global {VERSION} && ln -sf $(pyenv prefix) /root/.pyenv/versions/{VERSION}`},
+			},
+			FormatterBuildSteps: map[string][]BuildStep{
+				"ruff":  {{Kind: "run", Value: `pip install ruff`}},
+				"black": {{Kind: "run", Value: `pip install black`}},
+				"isort": {{Kind: "run", Value: `pip install isort`}},
+			},
+			LinterBuildSteps: map[string][]BuildStep{
+				"ruff": {}, // installed by FormatterBuildSteps["ruff"] if selected there
+				"mypy": {{Kind: "run", Value: `pip install mypy`}},
 			},
 			ContainerPaths: []ContainerPath{
 				{
@@ -39,9 +71,17 @@ var languageRegistry = map[string]Language{
 			},
 			MacOSDownloads: []MacOSDownload{
 				{
-					URL:         "https://www.python.org/ftp/python/{VERSION}/python-{VERSION}-macos11.pkg",
-					Arch:        "universal",
-					ArchiveRoot: "",
+					// python-build-standalone provides relocatable Python builds.
+					// Release date 20241002, Python 3.12.7; ArchiveRoot "python/" is the install tree.
+					URL:         "https://github.com/indygreg/python-build-standalone/releases/download/20241002/cpython-3.12.7+20241002-x86_64-apple-darwin-install_only.tar.gz",
+					Arch:        "x86_64",
+					ArchiveRoot: "python/",
+					InstallPath: "~/.ferry/runtimes/python-{VERSION}/",
+				},
+				{
+					URL:         "https://github.com/indygreg/python-build-standalone/releases/download/20241002/cpython-3.12.7+20241002-aarch64-apple-darwin-install_only.tar.gz",
+					Arch:        "arm64",
+					ArchiveRoot: "python/",
 					InstallPath: "~/.ferry/runtimes/python-{VERSION}/",
 				},
 			},
@@ -53,12 +93,13 @@ var languageRegistry = map[string]Language{
 			},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "pyenv",
-			DefaultVersion: "3.12",
+			Manager:           "pyenv",
+			DefaultVersion:    "3.12",
+			AvailableVersions: []string{"3.12", "3.11", "3.10", "3.9"},
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `curl https://pyenv.run | bash`},
 				{Kind: "env", Value: `PATH=/root/.pyenv/bin:/root/.pyenv/shims:$PATH`},
-				{Kind: "run", Value: `pyenv install {VERSION} && pyenv global {VERSION}`},
+				{Kind: "run", Value: `pyenv install {VERSION} && pyenv global {VERSION} && ln -sf $(pyenv prefix) /root/.pyenv/versions/{VERSION}`},
 				{Kind: "run", Value: `pip install pyright`},
 			},
 			ContainerPaths: []ContainerPath{
@@ -84,14 +125,19 @@ var languageRegistry = map[string]Language{
 		MacOSSupported:    true,
 		Runtime: &Runtime{
 			Manager:           "nvm",
-			DefaultVersion:    "lts",
-			AvailableVersions: []string{"lts", "22", "20", "18"},
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
 			PackageManager:    "npm",
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
 				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
-				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm use {VERSION} && nvm alias default {VERSION}`},
-				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g typescript-language-server typescript prettier eslint_d`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm use {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			FormatterBuildSteps: map[string][]BuildStep{
+				"prettier": {{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g prettier`}},
+			},
+			LinterBuildSteps: map[string][]BuildStep{
+				"eslint_d": {{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g eslint_d`}},
 			},
 			ContainerPaths: []ContainerPath{
 				{
@@ -101,13 +147,13 @@ var languageRegistry = map[string]Language{
 			},
 			MacOSDownloads: []MacOSDownload{
 				{
-					URL:         "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-{ARCH}.tar.gz",
+					URL:         "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz",
 					Arch:        "x86_64",
 					ArchiveRoot: "node-v{VERSION}-darwin-x64/",
 					InstallPath: "~/.ferry/runtimes/node-{VERSION}/",
 				},
 				{
-					URL:         "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-{ARCH}.tar.gz",
+					URL:         "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz",
 					Arch:        "arm64",
 					ArchiveRoot: "node-v{VERSION}-darwin-arm64/",
 					InstallPath: "~/.ferry/runtimes/node-{VERSION}/",
@@ -121,12 +167,13 @@ var languageRegistry = map[string]Language{
 			},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "nvm",
-			DefaultVersion: "lts",
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
 				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
-				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm use {VERSION}`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm use {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
 				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g typescript-language-server typescript`},
 			},
 			ContainerPaths: []ContainerPath{
@@ -152,18 +199,44 @@ var languageRegistry = map[string]Language{
 		MacOSSupported:    true,
 		Runtime: &Runtime{
 			Manager:           "nvm",
-			DefaultVersion:    "lts",
-			AvailableVersions: []string{"lts", "22", "20", "18"},
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
 			PackageManager:    "npm",
+			// BuildSteps cleared by deduplication when javascript is also selected.
+			// AddonBuildSteps install typescript-language-server into the shared node dir.
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
 				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
-				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm use {VERSION} && nvm alias default {VERSION}`},
-				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g typescript-language-server typescript prettier eslint_d`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm use {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g typescript-language-server typescript`},
+			},
+			AddonBuildSteps: []BuildStep{
+				// Runs even when deduplicated — installs typescript-ls into shared node.
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g typescript-language-server typescript`},
+			},
+			FormatterBuildSteps: map[string][]BuildStep{
+				"prettier": {{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g prettier`}},
+			},
+			LinterBuildSteps: map[string][]BuildStep{
+				"eslint_d": {{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g eslint_d`}},
 			},
 			ContainerPaths: []ContainerPath{
 				{
 					Container:   "/root/.nvm/versions/node/v{VERSION}/",
+					InstallPath: "~/.ferry/runtimes/node-{VERSION}/",
+				},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{
+					URL:         "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz",
+					Arch:        "x86_64",
+					ArchiveRoot: "node-v{VERSION}-darwin-x64/",
+					InstallPath: "~/.ferry/runtimes/node-{VERSION}/",
+				},
+				{
+					URL:         "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz",
+					Arch:        "arm64",
+					ArchiveRoot: "node-v{VERSION}-darwin-arm64/",
 					InstallPath: "~/.ferry/runtimes/node-{VERSION}/",
 				},
 			},
@@ -188,7 +261,7 @@ var languageRegistry = map[string]Language{
 			AvailableVersions: []string{"1.22.5", "1.21.11", "1.20.14"},
 			PackageManager:    "go",
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://go.dev/dl/go{VERSION}.linux-{ARCH}.tar.gz && tar -C /usr/local -xzf go{VERSION}.linux-{ARCH}.tar.gz && rm go{VERSION}.linux-{ARCH}.tar.gz`},
+				{Kind: "run", Value: `curl -fsSL https://go.dev/dl/go{VERSION}.linux-{ARCH}.tar.gz -o /tmp/go.tar.gz && tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz`},
 				{Kind: "env", Value: `PATH=/usr/local/go/bin:$PATH`},
 				{Kind: "env", Value: `GOPATH=/root/.ferry-gopath`},
 				{Kind: "run", Value: `go install golang.org/x/tools/gopls@latest && go install golang.org/x/tools/cmd/goimports@latest && go install honnef.co/go/tools/cmd/staticcheck@latest`},
@@ -199,13 +272,13 @@ var languageRegistry = map[string]Language{
 			},
 			MacOSDownloads: []MacOSDownload{
 				{
-					URL:         "https://go.dev/dl/go{VERSION}.darwin-{ARCH}.tar.gz",
+					URL:         "https://go.dev/dl/go{VERSION}.darwin-amd64.tar.gz",
 					Arch:        "x86_64",
 					ArchiveRoot: "go/",
 					InstallPath: "~/.ferry/runtimes/go-{VERSION}/",
 				},
 				{
-					URL:         "https://go.dev/dl/go{VERSION}.darwin-{ARCH}.tar.gz",
+					URL:         "https://go.dev/dl/go{VERSION}.darwin-arm64.tar.gz",
 					Arch:        "arm64",
 					ArchiveRoot: "go/",
 					InstallPath: "~/.ferry/runtimes/go-{VERSION}/",
@@ -220,10 +293,11 @@ var languageRegistry = map[string]Language{
 			},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "direct",
-			DefaultVersion: "1.22.5",
+			Manager:           "direct",
+			DefaultVersion:    "1.22.5",
+			AvailableVersions: []string{"1.22.5", "1.21.11", "1.20.14"},
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://go.dev/dl/go{VERSION}.linux-{ARCH}.tar.gz && tar -C /usr/local -xzf go{VERSION}.linux-{ARCH}.tar.gz && rm go{VERSION}.linux-{ARCH}.tar.gz`},
+				{Kind: "run", Value: `curl -fsSL https://go.dev/dl/go{VERSION}.linux-{ARCH}.tar.gz -o /tmp/go.tar.gz && tar -C /usr/local -xzf /tmp/go.tar.gz && rm /tmp/go.tar.gz`},
 				{Kind: "env", Value: `PATH=/usr/local/go/bin:$PATH`},
 				{Kind: "env", Value: `GOPATH=/root/.ferry-gopath`},
 				{Kind: "run", Value: `go install golang.org/x/tools/gopls@latest`},
@@ -291,9 +365,9 @@ var languageRegistry = map[string]Language{
 		},
 		LSPOnlyRuntime: &Runtime{
 			Manager:        "direct",
-			DefaultVersion: "2024-01-29",
+			DefaultVersion: "2026-04-13",
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/rust-lang/rust-analyzer/releases/download/{VERSION}/rust-analyzer-{ARCH}-unknown-linux-musl.gz && gunzip rust-analyzer-{ARCH}-unknown-linux-musl.gz && chmod +x rust-analyzer-{ARCH}-unknown-linux-musl && mv rust-analyzer-{ARCH}-unknown-linux-musl /usr/local/bin/rust-analyzer`},
+				{Kind: "run", Value: `curl -fsSL https://github.com/rust-lang/rust-analyzer/releases/download/{VERSION}/rust-analyzer-{ARCH}-unknown-linux-musl.gz -o /tmp/ra.gz && gunzip /tmp/ra.gz && chmod +x /tmp/rust-analyzer-{ARCH}-unknown-linux-musl && mv /tmp/rust-analyzer-{ARCH}-unknown-linux-musl /usr/local/bin/rust-analyzer`},
 			},
 			ContainerPaths: []ContainerPath{
 				{
@@ -341,8 +415,9 @@ var languageRegistry = map[string]Language{
 			LSPBuildSteps: []BuildStep{{Kind: "run", Value: `gem install ruby-lsp`}},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "rbenv",
-			DefaultVersion: "3.3.0",
+			Manager:           "rbenv",
+			DefaultVersion:    "3.3.0",
+			AvailableVersions: []string{"3.3.0", "3.2.4", "3.1.6"},
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `git clone https://github.com/rbenv/rbenv.git /root/.rbenv && git clone https://github.com/rbenv/ruby-build.git /root/.rbenv/plugins/ruby-build`},
 				{Kind: "env", Value: `PATH=/root/.rbenv/bin:/root/.rbenv/shims:$PATH`},
@@ -369,38 +444,48 @@ var languageRegistry = map[string]Language{
 			Manager:           "direct",
 			DefaultVersion:    "21",
 			AvailableVersions: []string{"21", "17", "11"},
+			// Use Adoptium APT repo — avoids fragile release-tag/arch naming in direct downloads
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21+37/OpenJDK21U-jdk_{ARCH}_linux_hotspot_21_37.tar.gz && mkdir -p /opt/java/21 && tar -xzf OpenJDK21U-jdk_{ARCH}_linux_hotspot_21_37.tar.gz --strip-components=1 -C /opt/java/21 && rm *.tar.gz`},
-				{Kind: "env", Value: `PATH=/opt/java/21/bin:$PATH`},
-				{Kind: "env", Value: `JAVA_HOME=/opt/java/21`},
-				{Kind: "run", Value: `curl -L "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf jdtls.tar.gz -C /opt/jdtls && rm jdtls.tar.gz`},
+				{Kind: "run", Value: `wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb jammy main" > /etc/apt/sources.list.d/adoptium.list && apt-get update && apt-get install -y temurin-{VERSION}-jdk && rm -rf /var/lib/apt/lists/*`},
+				{Kind: "env", Value: `PATH=/usr/lib/jvm/temurin-{VERSION}-jdk-amd64/bin:$PATH`},
+				{Kind: "env", Value: `JAVA_HOME=/usr/lib/jvm/temurin-{VERSION}-jdk-amd64`},
+				{Kind: "run", Value: `curl -fsSL "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o /tmp/jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls && rm /tmp/jdtls.tar.gz`},
+			},
+			// google-java-format: JAR downloaded into $JAVA_HOME/lib/ and a wrapper script
+			// placed in $JAVA_HOME/bin/ so it is extracted with the JDK ContainerPath.
+			FormatterBuildSteps: map[string][]BuildStep{
+				"google-java-format": {
+					{Kind: "run", Value: `curl -fsSL https://github.com/google/google-java-format/releases/download/v1.22.0/google-java-format-1.22.0-all-deps.jar -o $JAVA_HOME/lib/google-java-format.jar && printf '#!/bin/sh\nexec "$JAVA_HOME/bin/java" --add-exports jdk.compiler/com.sun.tools.javac.api=ALL-UNNAMED --add-exports jdk.compiler/com.sun.tools.javac.file=ALL-UNNAMED --add-exports jdk.compiler/com.sun.tools.javac.parser=ALL-UNNAMED --add-exports jdk.compiler/com.sun.tools.javac.tree=ALL-UNNAMED --add-exports jdk.compiler/com.sun.tools.javac.util=ALL-UNNAMED -jar "$JAVA_HOME/lib/google-java-format.jar" "$@"\n' > $JAVA_HOME/bin/google-java-format && chmod +x $JAVA_HOME/bin/google-java-format`},
+				},
 			},
 			ContainerPaths: []ContainerPath{
-				{Container: "/opt/java/21/", InstallPath: "~/.ferry/runtimes/java-21/"},
+				{Container: "/usr/lib/jvm/temurin-{VERSION}-jdk-amd64/", InstallPath: "~/.ferry/runtimes/java-{VERSION}/"},
 				{Container: "/opt/jdtls/", InstallPath: "~/.ferry/runtimes/jdtls/"},
 			},
 			MacOSDownloads: []MacOSDownload{
-				{URL: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21+37/OpenJDK21U-jdk_x64_mac_hotspot_21_37.tar.gz", Arch: "x86_64", ArchiveRoot: "jdk-21+37/Contents/Home/", InstallPath: "~/.ferry/runtimes/java-21/"},
-				{URL: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21+37/OpenJDK21U-jdk_aarch64_mac_hotspot_21_37.tar.gz", Arch: "arm64", ArchiveRoot: "jdk-21+37/Contents/Home/", InstallPath: "~/.ferry/runtimes/java-21/"},
+				{URL: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_x64_mac_hotspot_21.0.5_11.tar.gz", Arch: "x86_64", ArchiveRoot: "jdk-21.0.5+11/Contents/Home/", InstallPath: "~/.ferry/runtimes/java-{VERSION}/"},
+				{URL: "https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21.0.5%2B11/OpenJDK21U-jdk_aarch64_mac_hotspot_21.0.5_11.tar.gz", Arch: "arm64", ArchiveRoot: "jdk-21.0.5+11/Contents/Home/", InstallPath: "~/.ferry/runtimes/java-{VERSION}/"},
 			},
 			ShellInit: []string{
-				`export PATH="$HOME/.ferry/runtimes/java-21/bin:$PATH"`,
-				`export JAVA_HOME="$HOME/.ferry/runtimes/java-21"`,
+				`export PATH="$HOME/.ferry/runtimes/java-{VERSION}/bin:$PATH"`,
+				`export JAVA_HOME="$HOME/.ferry/runtimes/java-{VERSION}"`,
 			},
 			LSPBuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -L "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf jdtls.tar.gz -C /opt/jdtls && rm jdtls.tar.gz`},
+				{Kind: "run", Value: `curl -fsSL "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o /tmp/jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls && rm /tmp/jdtls.tar.gz`},
 			},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "direct",
-			DefaultVersion: "21",
+			Manager:           "direct",
+			DefaultVersion:    "21",
+			AvailableVersions: []string{"21", "17", "11"},
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/adoptium/temurin{VERSION}-binaries/releases/download/jdk-{VERSION}+37/OpenJDK{VERSION}U-jdk_{ARCH}_linux_hotspot_{VERSION}_37.tar.gz && mkdir -p /opt/java/{VERSION} && tar -xzf OpenJDK{VERSION}U-jdk_{ARCH}_linux_hotspot_{VERSION}_37.tar.gz --strip-components=1 -C /opt/java/{VERSION} && rm *.tar.gz`},
-				{Kind: "env", Value: `PATH=/opt/java/{VERSION}/bin:$PATH`},
-				{Kind: "run", Value: `curl -L "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf jdtls.tar.gz -C /opt/jdtls && rm jdtls.tar.gz`},
+				{Kind: "run", Value: `wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb jammy main" > /etc/apt/sources.list.d/adoptium.list && apt-get update && apt-get install -y temurin-{VERSION}-jdk && rm -rf /var/lib/apt/lists/*`},
+				{Kind: "env", Value: `PATH=/usr/lib/jvm/temurin-{VERSION}-jdk-amd64/bin:$PATH`},
+				{Kind: "env", Value: `JAVA_HOME=/usr/lib/jvm/temurin-{VERSION}-jdk-amd64`},
+				{Kind: "run", Value: `curl -fsSL "https://www.eclipse.org/downloads/download.php?file=/jdtls/milestones/1.31.0/jdt-language-server-1.31.0-202401111522.tar.gz" -o /tmp/jdtls.tar.gz && mkdir -p /opt/jdtls && tar -xzf /tmp/jdtls.tar.gz -C /opt/jdtls && rm /tmp/jdtls.tar.gz`},
 			},
 			ContainerPaths: []ContainerPath{
-				{Container: "/opt/java/{VERSION}/", InstallPath: "~/.ferry/runtimes/java-lsp-{VERSION}/"},
+				{Container: "/usr/lib/jvm/temurin-{VERSION}-jdk-amd64/", InstallPath: "~/.ferry/runtimes/java-lsp-{VERSION}/"},
 				{Container: "/opt/jdtls/", InstallPath: "~/.ferry/runtimes/jdtls/"},
 			},
 			ShellInit: []string{
@@ -419,23 +504,7 @@ var languageRegistry = map[string]Language{
 		ApproxSizeMB:      200,
 		ApproxLSPOnlyMB:   200,
 		MacOSSupported:    true,
-		Runtime: &Runtime{
-			Manager:           "direct",
-			DefaultVersion:    "17",
-			AvailableVersions: []string{"17", "16", "15"},
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/llvm/llvm-project/releases/download/llvmorg-{VERSION}.0.0/clang+llvm-{VERSION}.0.0-{ARCH}-linux-gnu.tar.xz && mkdir -p /opt/llvm && tar -xJf clang+llvm-{VERSION}.0.0-{ARCH}-linux-gnu.tar.xz --strip-components=1 -C /opt/llvm && rm *.tar.xz`},
-				{Kind: "env", Value: `PATH=/opt/llvm/bin:$PATH`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/opt/llvm/", InstallPath: "~/.ferry/runtimes/llvm-{VERSION}/"},
-			},
-			MacOSDownloads: []MacOSDownload{
-				{URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-{VERSION}.0.0/clang+llvm-{VERSION}.0.0-{ARCH}-apple-darwin22.0.tar.xz", Arch: "x86_64", ArchiveRoot: "clang+llvm-{VERSION}.0.0-x86_64-apple-darwin22.0/", InstallPath: "~/.ferry/runtimes/llvm-{VERSION}/"},
-				{URL: "https://github.com/llvm/llvm-project/releases/download/llvmorg-{VERSION}.0.0/clang+llvm-{VERSION}.0.0-arm64-apple-darwin22.0.tar.xz", Arch: "arm64", ArchiveRoot: "clang+llvm-{VERSION}.0.0-arm64-apple-darwin22.0/", InstallPath: "~/.ferry/runtimes/llvm-{VERSION}/"},
-			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/llvm-{VERSION}/bin:$PATH"`},
-		},
+		Runtime:           llvmRuntime,
 	},
 
 	"cpp": {
@@ -444,10 +513,10 @@ var languageRegistry = map[string]Language{
 		LSP:               "clangd",
 		Formatters:        []string{"clang-format"},
 		Linters:           []string{"clang-tidy"},
-		ApproxSizeMB:    200, // shares LLVM runtime with "c"
-		ApproxLSPOnlyMB: 200,
+		ApproxSizeMB:      200, // shares LLVM runtime with "c" via Manager deduplication
+		ApproxLSPOnlyMB:   200,
 		MacOSSupported:    true,
-		Runtime:           nil, // shares with "c"
+		Runtime:           llvmRuntime, // same toolchain as "c"; deduplicated when both are selected
 	},
 
 	"csharp": {
@@ -488,8 +557,9 @@ var languageRegistry = map[string]Language{
 			},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "direct",
-			DefaultVersion: "8.0",
+			Manager:           "direct",
+			DefaultVersion:    "8.0",
+			AvailableVersions: []string{"8.0", "7.0", "6.0"},
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `curl -LO https://dot.net/v1/dotnet-install.sh && chmod +x dotnet-install.sh && ./dotnet-install.sh --channel {VERSION} --install-dir /opt/dotnet && rm dotnet-install.sh`},
 				{Kind: "env", Value: `PATH=/opt/dotnet:$PATH`},
@@ -516,23 +586,37 @@ var languageRegistry = map[string]Language{
 		ApproxLSPOnlyMB:   15,
 		MacOSSupported:    true,
 		Runtime: &Runtime{
-			Manager:           "system",
-			DefaultVersion:    "8.3",
-			AvailableVersions: []string{"8.3", "8.2", "8.1"},
+			// PHP is installed via phpenv so the runtime lives at a predictable path
+			// (/root/.phpenv/versions/{VERSION}/) that can be cleanly extracted.
+			// intelephense is installed via nvm (Manager: "nvm" dedup handles shared node).
+			Manager:           "phpenv",
+			DefaultVersion:    "8.3.0",
+			AvailableVersions: []string{"8.3.0", "8.2.0", "8.1.0"},
 			PackageManager:    "composer",
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `apt-get install -y software-properties-common 2>/dev/null || true && apt-get install -y php8.3 php8.3-cli php8.3-mbstring php8.3-xml php8.3-curl 2>/dev/null || true && curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer`},
-				{Kind: "env", Value: `PATH=/usr/local/bin:$PATH`},
-				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash && export NVM_DIR=/root/.nvm && . $NVM_DIR/nvm.sh && nvm install lts && npm install --prefix /opt/intelephense intelephense`},
+				{Kind: "run", Value: `apt-get install -y re2c bison libxml2-dev libcurl4-openssl-dev libssl-dev libonig-dev libsqlite3-dev libreadline-dev 2>/dev/null || true`},
+				{Kind: "run", Value: `git clone https://github.com/phpenv/phpenv.git /root/.phpenv && git clone https://github.com/php-build/php-build.git /root/.phpenv/plugins/php-build`},
+				{Kind: "env", Value: `PATH=/root/.phpenv/bin:/root/.phpenv/shims:$PATH`},
+				{Kind: "run", Value: `phpenv install {VERSION} && phpenv global {VERSION}`},
+				{Kind: "run", Value: `curl -sS https://getcomposer.org/installer | php -- --install-dir=/root/.phpenv/versions/{VERSION}/bin --filename=composer`},
+			},
+			// php-cs-fixer: phar downloaded into the phpenv versioned bin dir so it is
+			// extracted with the PHP ContainerPath.
+			FormatterBuildSteps: map[string][]BuildStep{
+				"php-cs-fixer": {
+					{Kind: "run", Value: `curl -fsSL https://cs.symfony.com/download/php-cs-fixer-v3.phar -o /root/.phpenv/versions/{VERSION}/bin/php-cs-fixer && chmod +x /root/.phpenv/versions/{VERSION}/bin/php-cs-fixer`},
+				},
+			},
+			// intelephense installed into the shared nvm node via AddonBuildSteps
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g intelephense`},
 			},
 			ContainerPaths: []ContainerPath{
-				{Container: "/usr/bin/", InstallPath: "~/.ferry/runtimes/php-{VERSION}/bin/"},
-				{Container: "/usr/local/bin/composer", InstallPath: "~/.ferry/runtimes/php-{VERSION}/bin/composer"},
-				{Container: "/opt/intelephense/", InstallPath: "~/.ferry/runtimes/php-lsp/"},
+				// phpenv installs to a versioned directory — clean extraction boundary
+				{Container: "/root/.phpenv/versions/{VERSION}/", InstallPath: "~/.ferry/runtimes/php-{VERSION}/"},
 			},
 			ShellInit: []string{
-				`export PATH="$HOME/.ferry/runtimes/php-{VERSION}/bin:$PATH"`,
-				`export PATH="$HOME/.ferry/runtimes/php-lsp/node_modules/.bin:$PATH"`,
+				`export PATH="$HOME/.ferry/runtimes/php-{VERSION}/bin:$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`,
 			},
 		},
 	},
@@ -554,7 +638,18 @@ var languageRegistry = map[string]Language{
 				{Kind: "run", Value: `curl -s "https://get.sdkman.io" | bash`},
 				{Kind: "env", Value: `SDKMAN_DIR=/root/.sdkman`},
 				{Kind: "run", Value: `bash -c "source $SDKMAN_DIR/bin/sdkman-init.sh && sdk install java 21-tem && sdk install kotlin {VERSION}"`},
-				{Kind: "run", Value: `curl -LO https://github.com/fwcd/kotlin-language-server/releases/download/1.3.12/server.zip && unzip server.zip -d /opt/kotlin-ls && rm server.zip`},
+				{Kind: "run", Value: `curl -fsSL https://github.com/fwcd/kotlin-language-server/releases/download/1.3.13/server.zip -o /tmp/kotlin-ls.zip && unzip /tmp/kotlin-ls.zip -d /opt/kotlin-ls && rm /tmp/kotlin-ls.zip`},
+			},
+			// ktlint: standalone binary downloaded into the sdkman kotlin bin dir so it
+			// is extracted with the Kotlin ContainerPath. Requires Java at runtime
+			// (provided by the java-kotlin ContainerPath).
+			FormatterBuildSteps: map[string][]BuildStep{
+				"ktlint": {
+					{Kind: "run", Value: `curl -fsSL https://github.com/pinterest/ktlint/releases/download/1.3.1/ktlint -o /root/.sdkman/candidates/kotlin/{VERSION}/bin/ktlint && chmod +x /root/.sdkman/candidates/kotlin/{VERSION}/bin/ktlint`},
+				},
+			},
+			LinterBuildSteps: map[string][]BuildStep{
+				"ktlint": {}, // installed by FormatterBuildSteps["ktlint"]
 			},
 			ContainerPaths: []ContainerPath{
 				{Container: "/root/.sdkman/candidates/kotlin/{VERSION}/", InstallPath: "~/.ferry/runtimes/kotlin-{VERSION}/"},
@@ -567,11 +662,12 @@ var languageRegistry = map[string]Language{
 			},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "direct",
-			DefaultVersion: "1.3.12",
+			Manager:           "direct",
+			DefaultVersion:    "1.3.13",
+			AvailableVersions: []string{"1.3.13", "1.3.0", "1.2.0"},
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/fwcd/kotlin-language-server/releases/download/{VERSION}/server.zip && unzip server.zip -d /opt/kotlin-ls && rm server.zip`},
-				{Kind: "run", Value: `curl -LO https://github.com/adoptium/temurin21-binaries/releases/download/jdk-21+37/OpenJDK21U-jdk_{ARCH}_linux_hotspot_21_37.tar.gz && mkdir -p /opt/java/21 && tar -xzf OpenJDK21U-jdk_{ARCH}_linux_hotspot_21_37.tar.gz --strip-components=1 -C /opt/java/21 && rm *.tar.gz`},
+				{Kind: "run", Value: `curl -fsSL https://github.com/fwcd/kotlin-language-server/releases/download/{VERSION}/server.zip -o /tmp/kotlin-ls.zip && unzip /tmp/kotlin-ls.zip -d /opt/kotlin-ls && rm /tmp/kotlin-ls.zip`},
+				{Kind: "run", Value: `wget -qO - https://packages.adoptium.net/artifactory/api/gpg/key/public | gpg --dearmor -o /etc/apt/keyrings/adoptium.gpg && echo "deb [signed-by=/etc/apt/keyrings/adoptium.gpg] https://packages.adoptium.net/artifactory/deb jammy main" > /etc/apt/sources.list.d/adoptium.list && apt-get update && apt-get install -y temurin-21-jdk && rm -rf /var/lib/apt/lists/*`},
 			},
 			ContainerPaths: []ContainerPath{
 				{Container: "/opt/kotlin-ls/", InstallPath: "~/.ferry/runtimes/kotlin-ls/"},
@@ -581,71 +677,6 @@ var languageRegistry = map[string]Language{
 		},
 	},
 
-	"scala": {
-		Name:              "scala",
-		TreesitterParsers: []string{"scala"},
-		LSP:               "metals",
-		Formatters:        []string{"scalafmt"},
-		Linters:           []string{},
-		ApproxSizeMB:      250,
-		ApproxLSPOnlyMB:   25,
-		MacOSSupported:    true,
-		Runtime: &Runtime{
-			Manager:           "coursier",
-			DefaultVersion:    "3.4.0",
-			AvailableVersions: []string{"3.4.0", "3.3.3", "2.13.14"},
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -fLo cs https://github.com/coursier/launchers/raw/master/cs-{ARCH}-pc-linux && chmod +x cs && ./cs setup -y && rm cs`},
-				{Kind: "env", Value: `PATH=/root/.local/share/coursier/bin:$PATH`},
-				{Kind: "run", Value: `cs install scala:{VERSION} scalac:{VERSION} metals scalafmt`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/root/.local/share/coursier/", InstallPath: "~/.ferry/runtimes/coursier/"},
-			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/coursier/bin:$PATH"`},
-		},
-		LSPOnlyRuntime: &Runtime{
-			Manager:        "coursier",
-			DefaultVersion: "3.4.0",
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -fLo cs https://github.com/coursier/launchers/raw/master/cs-{ARCH}-pc-linux && chmod +x cs && ./cs setup -y && rm cs`},
-				{Kind: "env", Value: `PATH=/root/.local/share/coursier/bin:$PATH`},
-				{Kind: "run", Value: `cs install metals`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/root/.local/share/coursier/", InstallPath: "~/.ferry/runtimes/coursier/"},
-			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/coursier/bin:$PATH"`},
-		},
-	},
-
-	"swift": {
-		Name:              "swift",
-		TreesitterParsers: []string{"swift"},
-		LSP:               "sourcekit-lsp",
-		Formatters:        []string{"swift-format"},
-		Linters:           []string{},
-		ApproxSizeMB:      400,
-		ApproxLSPOnlyMB:   400,
-		MacOSSupported:    true,
-		Runtime: &Runtime{
-			Manager:           "direct",
-			DefaultVersion:    "5.10.1",
-			AvailableVersions: []string{"5.10.1", "5.9.2"},
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `apt-get install -y binutils libc6-dev libcurl4-openssl-dev libedit2 libgcc-9-dev libsqlite3-0 libstdc++-9-dev libxml2-dev libz3-dev pkg-config tzdata zlib1g-dev 2>/dev/null || true`},
-				{Kind: "run", Value: `curl -LO https://download.swift.org/swift-{VERSION}-release/ubuntu2204/swift-{VERSION}-RELEASE/swift-{VERSION}-RELEASE-ubuntu22.04.tar.gz && mkdir -p /opt/swift/{VERSION} && tar -xzf swift-{VERSION}-RELEASE-ubuntu22.04.tar.gz --strip-components=1 -C /opt/swift/{VERSION} && rm *.tar.gz`},
-				{Kind: "env", Value: `PATH=/opt/swift/{VERSION}/usr/bin:$PATH`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/opt/swift/{VERSION}/", InstallPath: "~/.ferry/runtimes/swift-{VERSION}/"},
-			},
-			MacOSDownloads: []MacOSDownload{
-				{URL: "https://download.swift.org/swift-{VERSION}-release/xcode/swift-{VERSION}-RELEASE/swift-{VERSION}-RELEASE-osx.pkg", Arch: "universal", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/swift-{VERSION}/"},
-			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/swift-{VERSION}/usr/bin:$PATH"`},
-		},
-	},
 
 	"zig": {
 		Name:              "zig",
@@ -658,20 +689,20 @@ var languageRegistry = map[string]Language{
 		MacOSSupported:    true,
 		Runtime: &Runtime{
 			Manager:           "direct",
-			DefaultVersion:    "0.13.0",
-			AvailableVersions: []string{"0.13.0", "0.12.1"},
+			DefaultVersion:    "0.14.0",
+			AvailableVersions: []string{"0.14.0", "0.13.0"},
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://ziglang.org/download/{VERSION}/zig-linux-{ARCH}-{VERSION}.tar.xz && mkdir -p /opt/zig && tar -xJf zig-linux-{ARCH}-{VERSION}.tar.xz --strip-components=1 -C /opt/zig && rm *.tar.xz`},
+				{Kind: "run", Value: `curl -fsSL https://ziglang.org/download/{VERSION}/zig-linux-{ARCH_NATIVE}-{VERSION}.tar.xz -o /tmp/zig.tar.xz && mkdir -p /opt/zig && tar -xJf /tmp/zig.tar.xz --strip-components=1 -C /opt/zig && rm /tmp/zig.tar.xz`},
 				{Kind: "env", Value: `PATH=/opt/zig:$PATH`},
-				{Kind: "run", Value: `curl -LO https://github.com/zigtools/zls/releases/download/{VERSION}/zls-{ARCH}-linux.tar.xz && mkdir -p /opt/zls && tar -xJf zls-{ARCH}-linux.tar.xz -C /opt/zls && rm *.tar.xz`},
+				{Kind: "run", Value: `curl -fsSL https://github.com/zigtools/zls/releases/download/{VERSION}/zls-{ARCH_NATIVE}-linux.tar.xz -o /tmp/zls.tar.xz && mkdir -p /opt/zls && tar -xJf /tmp/zls.tar.xz -C /opt/zls && rm /tmp/zls.tar.xz`},
 			},
 			ContainerPaths: []ContainerPath{
 				{Container: "/opt/zig/", InstallPath: "~/.ferry/runtimes/zig-{VERSION}/"},
 				{Container: "/opt/zls/", InstallPath: "~/.ferry/runtimes/zls/"},
 			},
 			MacOSDownloads: []MacOSDownload{
-				{URL: "https://ziglang.org/download/{VERSION}/zig-macos-{ARCH}-{VERSION}.tar.xz", Arch: "x86_64", ArchiveRoot: "zig-macos-x86_64-{VERSION}/", InstallPath: "~/.ferry/runtimes/zig-{VERSION}/"},
-				{URL: "https://ziglang.org/download/{VERSION}/zig-macos-{ARCH}-{VERSION}.tar.xz", Arch: "arm64", ArchiveRoot: "zig-macos-aarch64-{VERSION}/", InstallPath: "~/.ferry/runtimes/zig-{VERSION}/"},
+				{URL: "https://ziglang.org/download/{VERSION}/zig-macos-x86_64-{VERSION}.tar.xz", Arch: "x86_64", ArchiveRoot: "zig-macos-x86_64-{VERSION}/", InstallPath: "~/.ferry/runtimes/zig-{VERSION}/"},
+				{URL: "https://ziglang.org/download/{VERSION}/zig-macos-aarch64-{VERSION}.tar.xz", Arch: "arm64", ArchiveRoot: "zig-macos-aarch64-{VERSION}/", InstallPath: "~/.ferry/runtimes/zig-{VERSION}/"},
 			},
 			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/zig-{VERSION}:$HOME/.ferry/runtimes/zls:$PATH"`},
 		},
@@ -704,8 +735,9 @@ var languageRegistry = map[string]Language{
 			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/elixir-{VERSION}/bin:$HOME/.ferry/runtimes/elixir-ls:$PATH"`},
 		},
 		LSPOnlyRuntime: &Runtime{
-			Manager:        "direct",
-			DefaultVersion: "0.21.3",
+			Manager:           "direct",
+			DefaultVersion:    "0.21.3",
+			AvailableVersions: []string{"0.21.3", "0.20.0", "0.19.0"},
 			BuildSteps: []BuildStep{
 				{Kind: "run", Value: `apt-get install -y erlang 2>/dev/null || true`},
 				{Kind: "run", Value: `curl -LO https://github.com/elixir-lsp/elixir-ls/releases/download/v{VERSION}/elixir-ls-v{VERSION}.zip && mkdir -p /opt/elixir-ls && unzip elixir-ls-v{VERSION}.zip -d /opt/elixir-ls && rm *.zip && chmod +x /opt/elixir-ls/language_server.sh`},
@@ -717,73 +749,6 @@ var languageRegistry = map[string]Language{
 		},
 	},
 
-	"dart": {
-		Name:              "dart",
-		TreesitterParsers: []string{"dart"},
-		LSP:               "dart",
-		Formatters:        []string{"dart format"},
-		Linters:           []string{"dart analyze"},
-		ApproxSizeMB:      200,
-		ApproxLSPOnlyMB:   200,
-		MacOSSupported:    true,
-		Runtime: &Runtime{
-			Manager:           "direct",
-			DefaultVersion:    "3.5.0",
-			AvailableVersions: []string{"3.5.0", "3.4.4", "3.3.4"},
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://storage.googleapis.com/dart-archive/channels/stable/release/{VERSION}/sdk/dartsdk-linux-{ARCH}-release.zip && mkdir -p /opt/dart && unzip dartsdk-linux-{ARCH}-release.zip -d /opt && mv /opt/dart-sdk /opt/dart/{VERSION} && rm *.zip`},
-				{Kind: "env", Value: `PATH=/opt/dart/{VERSION}/bin:$PATH`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/opt/dart/{VERSION}/", InstallPath: "~/.ferry/runtimes/dart-{VERSION}/"},
-			},
-			MacOSDownloads: []MacOSDownload{
-				{URL: "https://storage.googleapis.com/dart-archive/channels/stable/release/{VERSION}/sdk/dartsdk-macos-x64-release.zip", Arch: "x86_64", ArchiveRoot: "dart-sdk/", InstallPath: "~/.ferry/runtimes/dart-{VERSION}/"},
-				{URL: "https://storage.googleapis.com/dart-archive/channels/stable/release/{VERSION}/sdk/dartsdk-macos-arm64-release.zip", Arch: "arm64", ArchiveRoot: "dart-sdk/", InstallPath: "~/.ferry/runtimes/dart-{VERSION}/"},
-			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/dart-{VERSION}/bin:$PATH"`},
-		},
-	},
-
-	"r": {
-		Name:              "r",
-		TreesitterParsers: []string{"r"},
-		LSP:               "r-languageserver",
-		Formatters:        []string{"styler"},
-		Linters:           []string{"lintr"},
-		ApproxSizeMB:      300,
-		ApproxLSPOnlyMB:   15,
-		MacOSSupported:    true,
-		Runtime: &Runtime{
-			Manager:           "system",
-			DefaultVersion:    "4.4",
-			AvailableVersions: []string{"4.4", "4.3"},
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `apt-get install -y r-base r-base-dev 2>/dev/null || true`},
-				{Kind: "run", Value: `Rscript -e "install.packages(c('languageserver', 'styler', 'lintr'), repos='https://cloud.r-project.org')"`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/usr/lib/R/", InstallPath: "~/.ferry/runtimes/r-{VERSION}/"},
-				{Container: "/usr/local/lib/R/", InstallPath: "~/.ferry/runtimes/r-{VERSION}-local/"},
-			},
-			ShellInit: []string{
-				`export PATH="$HOME/.ferry/runtimes/r-{VERSION}/bin:$PATH"`,
-				`export R_HOME="$HOME/.ferry/runtimes/r-{VERSION}"`,
-			},
-		},
-		LSPOnlyRuntime: &Runtime{
-			Manager:        "system",
-			DefaultVersion: "4.4",
-			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `apt-get install -y r-base 2>/dev/null || true`},
-				{Kind: "run", Value: `Rscript -e "install.packages('languageserver', repos='https://cloud.r-project.org')"`},
-			},
-			ContainerPaths: []ContainerPath{
-				{Container: "/usr/lib/R/", InstallPath: "~/.ferry/runtimes/r-lsp-{VERSION}/"},
-			},
-			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/r-lsp-{VERSION}/bin:$PATH"`},
-		},
-	},
 
 	"lua": {
 		Name:              "lua",
@@ -794,10 +759,11 @@ var languageRegistry = map[string]Language{
 		ApproxLSPOnlyMB:   5,
 		MacOSSupported:    true,
 		Runtime: &Runtime{
-			Manager:        "system",
-			DefaultVersion: "3.9.1",
+			Manager:           "system",
+			DefaultVersion:    "3.18.2",
+			AvailableVersions: []string{"3.18.2", "3.17.1", "3.16.0"},
 			BuildSteps: []BuildStep{
-				{Kind: "run", Value: `curl -LO https://github.com/LuaLS/lua-language-server/releases/download/{VERSION}/lua-language-server-{VERSION}-linux-{ARCH}.tar.gz && mkdir -p /opt/lua-ls && tar -xzf lua-language-server-{VERSION}-linux-{ARCH}.tar.gz -C /opt/lua-ls && rm *.tar.gz`},
+				{Kind: "run", Value: `curl -fsSL https://github.com/LuaLS/lua-language-server/releases/download/{VERSION}/lua-language-server-{VERSION}-linux-x64.tar.gz -o /tmp/lua-ls.tar.gz && mkdir -p /opt/lua-ls && tar -xzf /tmp/lua-ls.tar.gz -C /opt/lua-ls && rm /tmp/lua-ls.tar.gz`},
 			},
 			ContainerPaths: []ContainerPath{
 				{Container: "/opt/lua-ls/", InstallPath: "~/.ferry/runtimes/lua-ls/"},
@@ -810,26 +776,45 @@ var languageRegistry = map[string]Language{
 		},
 	},
 
+	// bash, yaml, json, markdown, dockerfile share the nvm runtime manager.
+	// The first of these (or javascript/typescript) to appear in a profile
+	// owns the ContainerPath. All subsequent ones use AddonBuildSteps to install
+	// their tools into the shared node directory.
+	// shfmt and shellcheck are static binaries shipped via CLIDownloads.
+	// hadolint is a static binary shipped via CLIDownloads.
+	// marksman is a static binary shipped via CLIDownloads.
+
 	"bash": {
 		Name:              "bash",
 		TreesitterParsers: []string{"bash"},
 		LSP:               "bash-language-server",
-		Formatters:        []string{"shfmt"},
-		Linters:           []string{"shellcheck"},
-		ApproxSizeMB:      0,
+		Formatters:        []string{"shfmt"},     // static binary via CLIDownloads
+		Linters:           []string{"shellcheck"}, // static binary via CLIDownloads
+		ApproxSizeMB:      5,
 		MacOSSupported:    true,
-		Runtime:           nil,
-	},
-
-	"sh": {
-		Name:              "sh",
-		TreesitterParsers: []string{"bash"},
-		LSP:               "bash-language-server",
-		Formatters:        []string{"shfmt"},
-		Linters:           []string{"shellcheck"},
-		ApproxSizeMB:      0,
-		MacOSSupported:    true,
-		Runtime:           nil,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			// Full BuildSteps: run only if this is the first nvm language in the profile.
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			// AddonBuildSteps: always run, installs bash-ls into the shared node.
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g bash-language-server`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
 	},
 
 	"yaml": {
@@ -837,35 +822,222 @@ var languageRegistry = map[string]Language{
 		TreesitterParsers: []string{"yaml"},
 		LSP:               "yaml-language-server",
 		Formatters:        []string{"prettier"},
+		ApproxSizeMB:      5,
 		MacOSSupported:    true,
-		Runtime:           nil,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g yaml-language-server prettier`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
 	},
 
 	"json": {
 		Name:              "json",
 		TreesitterParsers: []string{"json", "jsonc"},
 		LSP:               "json-language-server",
-		Formatters:        []string{"prettier", "jq"},
-		MacOSSupported:    true,
-		Runtime:           nil,
+		// prettier is the standard; jq ships as a CLI binary so it's always available.
+		Formatters:     []string{"prettier", "jq"},
+		ApproxSizeMB:   5,
+		MacOSSupported: true,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			// vscode-langservers-extracted provides json-language-server + html/css servers.
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g vscode-langservers-extracted prettier`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
 	},
 
 	"markdown": {
 		Name:              "markdown",
 		TreesitterParsers: []string{"markdown", "markdown_inline"},
-		LSP:               "marksman",
+		// marksman is a static binary shipped via CLIDownloads — no node needed for the LSP.
+		LSP:            "marksman",
+		Formatters:     []string{"prettier"},
+		ApproxSizeMB:   5,
+		MacOSSupported: true,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			// prettier handles markdown formatting; marksman LSP is a static binary.
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g prettier`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
+	},
+
+	// html, css share the nvm runtime manager with javascript/typescript/bash/yaml/json/markdown.
+	// vscode-langservers-extracted bundles the HTML, CSS, and JSON language servers in one
+	// npm package. Installing it here is idempotent if json, yaml, or markdown are also
+	// selected — npm deduplicates the install automatically.
+
+	"html": {
+		Name:              "html",
+		TreesitterParsers: []string{"html"},
+		LSP:               "vscode-html-language-server",
 		Formatters:        []string{"prettier"},
+		ApproxSizeMB:      5,
 		MacOSSupported:    true,
-		Runtime:           nil,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g vscode-langservers-extracted prettier`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
+	},
+
+	"css": {
+		Name:              "css",
+		TreesitterParsers: []string{"css"},
+		LSP:               "vscode-css-language-server",
+		Formatters:        []string{"prettier"},
+		Linters:           []string{"stylelint"},
+		ApproxSizeMB:      5,
+		MacOSSupported:    true,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			// stylelint-config-standard is the baseline ruleset for stylelint.
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g vscode-langservers-extracted prettier stylelint stylelint-config-standard`},
+			},
+			LinterBuildSteps: map[string][]BuildStep{
+				"stylelint": {}, // installed via AddonBuildSteps above
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
+	},
+
+	// sql uses sqls — a self-contained Go binary with no runtime dependency.
+	// The binary is placed in /opt/sqls/bin/ so it extracts as a proper directory
+	// (matching the pattern used by Zig, lua-language-server, etc.) rather than a
+	// single-file component that would install as a directory on the target.
+	"sql": {
+		Name:              "sql",
+		TreesitterParsers: []string{"sql"},
+		LSP:               "sqls",
+		ApproxSizeMB:      5,
+		MacOSSupported:    true,
+		Runtime: &Runtime{
+			Manager:        "none",
+			DefaultVersion: "0.2.28",
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `mkdir -p /opt/sqls/bin && curl -fsSL https://github.com/lighttiger2505/sqls/releases/download/v{VERSION}/sqls_linux_{ARCH} -o /opt/sqls/bin/sqls && chmod +x /opt/sqls/bin/sqls`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/opt/sqls/", InstallPath: "~/.ferry/runtimes/sqls/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://github.com/lighttiger2505/sqls/releases/download/v{VERSION}/sqls_darwin_amd64", Arch: "x86_64", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/sqls/"},
+				{URL: "https://github.com/lighttiger2505/sqls/releases/download/v{VERSION}/sqls_darwin_arm64", Arch: "arm64", ArchiveRoot: "", InstallPath: "~/.ferry/runtimes/sqls/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/sqls/bin:$PATH"`},
+		},
 	},
 
 	"dockerfile": {
 		Name:              "dockerfile",
 		TreesitterParsers: []string{"dockerfile"},
 		LSP:               "dockerfile-language-server",
-		Formatters:        []string{"hadolint"},
-		Linters:           []string{"hadolint"},
-		MacOSSupported:    true,
-		Runtime:           nil,
+		// hadolint ships as a static binary via CLIDownloads.
+		// It is a linter only — conform.nvim has no hadolint formatter.
+		Formatters:     []string{},
+		Linters:        []string{"hadolint"},
+		ApproxSizeMB:   5,
+		MacOSSupported: true,
+		Runtime: &Runtime{
+			Manager:           "nvm",
+			DefaultVersion:    "22",
+			AvailableVersions: []string{"22", "20", "18"},
+			BuildSteps: []BuildStep{
+				{Kind: "run", Value: `curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.7/install.sh | bash`},
+				{Kind: "env", Value: `NVM_DIR=/root/.nvm`},
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && nvm install {VERSION} && nvm alias default {VERSION} && ln -sf $(. $NVM_DIR/nvm.sh && nvm which {VERSION} | xargs dirname | xargs dirname) /root/.nvm/versions/node/v{VERSION}`},
+			},
+			AddonBuildSteps: []BuildStep{
+				{Kind: "run", Value: `. $NVM_DIR/nvm.sh && npm install -g dockerfile-language-server-nodejs`},
+			},
+			ContainerPaths: []ContainerPath{
+				{Container: "/root/.nvm/versions/node/v{VERSION}/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			MacOSDownloads: []MacOSDownload{
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-x64.tar.gz", Arch: "x86_64", ArchiveRoot: "node-v{VERSION}-darwin-x64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+				{URL: "https://nodejs.org/dist/v{VERSION}/node-v{VERSION}-darwin-arm64.tar.gz", Arch: "arm64", ArchiveRoot: "node-v{VERSION}-darwin-arm64/", InstallPath: "~/.ferry/runtimes/node-{VERSION}/"},
+			},
+			ShellInit: []string{`export PATH="$HOME/.ferry/runtimes/node-{VERSION}/bin:$PATH"`},
+		},
 	},
 }

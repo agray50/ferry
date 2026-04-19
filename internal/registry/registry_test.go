@@ -56,43 +56,6 @@ func TestNames(t *testing.T) {
 	}
 }
 
-func TestResolveLanguages(t *testing.T) {
-	langs, err := ResolveLanguages([]config.LanguageConfig{
-		{Name: "python", Tier: "full", LSP: "pylsp", RuntimeVersion: "3.11", ExtraPackages: []string{"numpy", "pandas"}},
-		{Name: "go", Tier: "full"},
-	})
-	if err != nil {
-		t.Fatalf("ResolveLanguages: %v", err)
-	}
-	if len(langs) != 2 {
-		t.Fatalf("expected 2 languages, got %d", len(langs))
-	}
-	if langs[0].LSP != "pylsp" {
-		t.Errorf("expected pylsp override, got %s", langs[0].LSP)
-	}
-	if langs[0].Runtime.DefaultVersion != "3.11" {
-		t.Errorf("expected 3.11 runtime, got %s", langs[0].Runtime.DefaultVersion)
-	}
-	if len(langs[0].Runtime.ExtraPackages) != 2 {
-		t.Errorf("expected 2 extra packages, got %d", len(langs[0].Runtime.ExtraPackages))
-	}
-}
-
-func TestResolveLanguagesUnknown(t *testing.T) {
-	_, err := ResolveLanguages([]config.LanguageConfig{{Name: "cobol", Tier: "full"}})
-	if err == nil {
-		t.Fatal("expected error for unknown language")
-	}
-}
-
-func TestResolveLanguagesInvalidLSP(t *testing.T) {
-	_, err := ResolveLanguages([]config.LanguageConfig{
-		{Name: "python", Tier: "full", LSP: "rust-analyzer"},
-	})
-	if err == nil {
-		t.Fatal("expected error for invalid LSP override")
-	}
-}
 
 func TestBuildStepKinds(t *testing.T) {
 	run := BuildStep{Kind: "run", Value: "echo hello"}
@@ -208,8 +171,8 @@ func TestAllLanguagesHaveRequiredFields(t *testing.T) {
 	languages := []string{
 		"python", "javascript", "typescript", "go", "rust",
 		"ruby", "java", "c", "cpp", "csharp", "php",
-		"kotlin", "scala", "swift", "zig", "elixir", "dart", "r",
-		"lua", "bash", "sh",
+		"kotlin", "zig", "elixir",
+		"lua", "bash",
 		"yaml", "json", "markdown", "dockerfile",
 	}
 	for _, name := range languages {
@@ -247,11 +210,11 @@ func TestAllLanguagesHaveSizeEstimates(t *testing.T) {
 
 func TestResolveFromProfile(t *testing.T) {
 	langs := []config.LanguageConfig{
-		{Name: "python", Tier: "full", RuntimeVersion: "3.11", LSP: "pylsp"},
+		{Name: "python", Tier: "full", RuntimeVersion: "3.11", LSP: "pylsp", ExtraPackages: []string{"numpy", "pandas"}},
 		{Name: "go", Tier: "lsp-only"},
 	}
 
-	resolved, err := ResolveFromProfile(langs)
+	resolved, err := ResolveFromProfile(langs, nil)
 	if err != nil {
 		t.Fatalf("ResolveFromProfile: %v", err)
 	}
@@ -259,7 +222,7 @@ func TestResolveFromProfile(t *testing.T) {
 		t.Fatalf("expected 2 resolved languages, got %d", len(resolved))
 	}
 
-	// Python: full tier, pylsp override
+	// Python: full tier, pylsp override, version + extra packages applied
 	py := resolved[0]
 	if py.Language.Name != "python" {
 		t.Errorf("resolved[0].Name = %q, want python", py.Language.Name)
@@ -273,6 +236,9 @@ func TestResolveFromProfile(t *testing.T) {
 	if py.EffectiveLSP != "pylsp" {
 		t.Errorf("python EffectiveLSP = %q, want pylsp", py.EffectiveLSP)
 	}
+	if len(py.Runtime.ExtraPackages) != 2 {
+		t.Errorf("python ExtraPackages = %d, want 2", len(py.Runtime.ExtraPackages))
+	}
 
 	// Go: lsp-only tier
 	go_ := resolved[1]
@@ -282,7 +248,7 @@ func TestResolveFromProfile(t *testing.T) {
 }
 
 func TestResolveFromProfileUnknownLanguage(t *testing.T) {
-	_, err := ResolveFromProfile([]config.LanguageConfig{{Name: "cobol", Tier: "full"}})
+	_, err := ResolveFromProfile([]config.LanguageConfig{{Name: "cobol", Tier: "full"}}, nil)
 	if err == nil {
 		t.Fatal("expected error for unknown language")
 	}
@@ -293,19 +259,32 @@ func TestResolveFromProfileDeduplicatesNVM(t *testing.T) {
 		{Name: "javascript", Tier: "full"},
 		{Name: "typescript", Tier: "full"},
 	}
-	resolved, err := ResolveFromProfile(langs)
+	resolved, err := ResolveFromProfile(langs, nil)
 	if err != nil {
 		t.Fatalf("ResolveFromProfile: %v", err)
 	}
-	// Both resolved but typescript has nil Runtime (shares nvm with javascript)
-	var runtimeCount int
+	// javascript claims the nvm runtime (has ContainerPaths).
+	// typescript shares nvm: BuildSteps+ContainerPaths cleared, but AddonBuildSteps kept
+	// so it can still install typescript-language-server into the shared node dir.
+	var withContainerPaths int
 	for _, r := range resolved {
-		if r.Runtime != nil {
-			runtimeCount++
+		if r.Runtime != nil && len(r.Runtime.ContainerPaths) > 0 {
+			withContainerPaths++
 		}
 	}
-	if runtimeCount != 1 {
-		t.Errorf("js+ts should produce 1 runtime component, got %d", runtimeCount)
+	if withContainerPaths != 1 {
+		t.Errorf("js+ts should produce 1 extracted runtime component, got %d", withContainerPaths)
+	}
+	// typescript should still have AddonBuildSteps so its LSP gets installed
+	tsResolved := resolved[1]
+	if tsResolved.Runtime == nil {
+		t.Fatal("typescript Runtime should not be nil (needs AddonBuildSteps)")
+	}
+	if len(tsResolved.Runtime.AddonBuildSteps) == 0 {
+		t.Error("typescript should have AddonBuildSteps to install typescript-language-server")
+	}
+	if len(tsResolved.Runtime.BuildSteps) != 0 {
+		t.Error("typescript BuildSteps should be cleared by deduplication")
 	}
 }
 

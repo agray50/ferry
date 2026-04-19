@@ -51,7 +51,20 @@ type Runtime struct {
 
 	// Linux Docker build sequence: alternating RUN and ENV instructions.
 	// {VERSION} and {ARCH} are substituted at bundle time.
+	// Only emitted for the first language claiming this Manager; subsequent
+	// languages sharing the same Manager have BuildSteps cleared by deduplication.
 	BuildSteps []BuildStep
+
+	// AddonBuildSteps are always emitted regardless of runtime deduplication.
+	// Use these for tool installs (LSP, formatter, linter) that piggyback on a
+	// shared runtime managed by another language (e.g. npm tools on a shared
+	// nvm node install). {VERSION} and {ARCH} substituted at bundle time.
+	AddonBuildSteps []BuildStep
+
+	// Per-tool install steps keyed by formatter/linter name.
+	// Dockerfile generator emits only the steps for the effective tool list.
+	FormatterBuildSteps map[string][]BuildStep
+	LinterBuildSteps    map[string][]BuildStep
 
 	// Paths to extract from the Linux container after build.
 	// These point at the versioned runtime directory, not the version manager.
@@ -145,16 +158,20 @@ func IsValidLSP(language, lsp string) bool {
 // ResolvedLanguage is a language with its effective runtime and LSP selected
 // based on the LanguageConfig from ferry.lock.
 type ResolvedLanguage struct {
-	Language     Language
-	Runtime      *Runtime // nil if language has no runtime or tier is lsp-only with nil LSPOnlyRuntime
-	EffectiveLSP string
-	Config       config.LanguageConfig
+	Language           Language
+	Runtime            *Runtime // nil if language has no runtime or tier is lsp-only with nil LSPOnlyRuntime
+	EffectiveLSP       string
+	EffectiveFormatters []string // from LanguageConfig override, or Language.Formatters default
+	EffectiveLinters   []string // from LanguageConfig override, or Language.Linters default
+	Config             config.LanguageConfig
 }
 
 // ResolveFromProfile resolves a list of LanguageConfigs from a profile into
 // ResolvedLanguages with the correct runtime tier and LSP applied.
 // Returns error if any language name is unknown or LSP override is invalid.
-func ResolveFromProfile(langs []config.LanguageConfig) ([]ResolvedLanguage, error) {
+// tools may be nil; when provided, custom LSPs defined in the tools file are
+// accepted as valid overrides.
+func ResolveFromProfile(langs []config.LanguageConfig, tools *config.ToolsFile) ([]ResolvedLanguage, error) {
 	seen := map[string]bool{} // manager → already have runtime component
 	var out []ResolvedLanguage
 
@@ -168,7 +185,7 @@ func ResolveFromProfile(langs []config.LanguageConfig) ([]ResolvedLanguage, erro
 		lsp := lc.LSP
 		if lsp == "" {
 			lsp = l.LSP
-		} else if !IsValidLSP(lc.Name, lsp) {
+		} else if !IsValidLSP(lc.Name, lsp) && !tools.HasLSP(lsp) {
 			return nil, fmt.Errorf("invalid LSP %q for language %q", lsp, lc.Name)
 		}
 
@@ -182,60 +199,54 @@ func ResolveFromProfile(langs []config.LanguageConfig) ([]ResolvedLanguage, erro
 		}
 
 		// Deduplicate by runtime manager: if two languages share a manager (e.g.
-		// javascript and typescript both use nvm), only the first gets a runtime.
+		// javascript and typescript both use nvm), only the first gets BuildSteps
+		// and ContainerPaths. Subsequent languages keep AddonBuildSteps so their
+		// tool installs (LSP, formatter, linter) still run against the shared runtime.
 		if rt != nil && rt.Manager != "" && rt.Manager != "system" && rt.Manager != "none" {
 			if seen[rt.Manager] {
-				rt = nil // subsequent language with same manager gets no runtime component
+				dedup := *rt
+				dedup.BuildSteps = nil
+				dedup.ContainerPaths = nil
+				dedup.LSPBuildSteps = nil
+				rt = &dedup
 			} else {
 				seen[rt.Manager] = true
 			}
 		}
 
-		// Apply version override
-		if rt != nil && lc.RuntimeVersion != "" {
-			copy := *rt
-			copy.DefaultVersion = lc.RuntimeVersion
-			rt = &copy
+		// Apply version and extra-package overrides
+		if rt != nil && (lc.RuntimeVersion != "" || len(lc.ExtraPackages) > 0) {
+			cp := *rt
+			if lc.RuntimeVersion != "" {
+				cp.DefaultVersion = lc.RuntimeVersion
+			}
+			if len(lc.ExtraPackages) > 0 {
+				cp.ExtraPackages = append(append([]string{}, rt.ExtraPackages...), lc.ExtraPackages...)
+			}
+			rt = &cp
+		}
+
+		// Resolve effective formatters and linters: use the lock file override if
+		// set, otherwise fall back to the registry defaults.
+		effectiveFmt := l.Formatters
+		if len(lc.Formatters) > 0 {
+			effectiveFmt = lc.Formatters
+		}
+		effectiveLint := l.Linters
+		if len(lc.Linters) > 0 {
+			effectiveLint = lc.Linters
 		}
 
 		out = append(out, ResolvedLanguage{
-			Language:     l,
-			Runtime:      rt,
-			EffectiveLSP: lsp,
-			Config:       lc,
+			Language:            l,
+			Runtime:             rt,
+			EffectiveLSP:        lsp,
+			EffectiveFormatters: effectiveFmt,
+			EffectiveLinters:    effectiveLint,
+			Config:              lc,
 		})
 	}
 	return out, nil
 }
 
-// ResolveLanguages resolves a list of LanguageConfig entries against the registry.
-// TODO: rewrite in Phase 3 to fully handle Tier, Formatters, Linters fields.
-func ResolveLanguages(langs []config.LanguageConfig) ([]Language, error) {
-	var out []Language
-	for _, lc := range langs {
-		l, err := Get(lc.Name)
-		if err != nil {
-			return nil, err
-		}
-
-		if lc.LSP != "" {
-			if !IsValidLSP(lc.Name, lc.LSP) {
-				return nil, fmt.Errorf("invalid LSP %q for language %q", lc.LSP, lc.Name)
-			}
-			l.LSP = lc.LSP
-		}
-		if l.Runtime != nil && (lc.RuntimeVersion != "" || len(lc.ExtraPackages) > 0) {
-			rt := *l.Runtime
-			if lc.RuntimeVersion != "" {
-				rt.DefaultVersion = lc.RuntimeVersion
-			}
-			if len(lc.ExtraPackages) > 0 {
-				rt.ExtraPackages = append(append([]string{}, rt.ExtraPackages...), lc.ExtraPackages...)
-			}
-			l.Runtime = &rt
-		}
-		out = append(out, l)
-	}
-	return out, nil
-}
 
