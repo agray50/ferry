@@ -33,6 +33,7 @@ func DiscoverShell() ShellDiscovery {
 	// detect theme
 	p10k := filepath.Join(home, ".p10k.zsh")
 	starship := filepath.Join(home, ".config", "starship.toml")
+	pure := filepath.Join(home, ".zsh", "pure", "pure.zsh")
 	switch {
 	case fileExists(p10k):
 		d.ThemeDetected = "p10k"
@@ -40,6 +41,9 @@ func DiscoverShell() ShellDiscovery {
 	case fileExists(starship):
 		d.ThemeDetected = "starship"
 		d.ThemeConfigPath = starship
+	case fileExists(pure):
+		d.ThemeDetected = "pure"
+		d.ThemeConfigPath = ""
 	case fileExists(filepath.Join(home, ".oh-my-zsh")):
 		d.ThemeDetected = "oh-my-zsh"
 	}
