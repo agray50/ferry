@@ -4,8 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
+
+	cp "github.com/otiai10/copy"
 
 	"github.com/anthropics/ferry/internal/config"
 	"github.com/anthropics/ferry/internal/registry"
@@ -22,15 +25,21 @@ type componentSpec struct {
 	installPath   string
 	binSymlink    string
 	version       string
+	localPath     string // if set, copy from local filesystem instead of docker cp
+	preserve      bool   // if true, install script skips restore when dest already exists
 }
 
 // buildComponentSpecs assembles the full list of components to extract for a build.
 func buildComponentSpecs(track BuildTrack, lock *config.LockFile, profile string, langs []registry.ResolvedLanguage) []componentSpec {
-	specs := []componentSpec{
-		{id: "nvim-binary", containerPath: "/opt/nvim/", installPath: "~/.local/share/nvim-dist/", binSymlink: "~/.local/bin/nvim"},
-		{id: "treesitter/parsers", containerPath: "/root/.local/share/nvim/lazy/nvim-treesitter/parser/", installPath: "~/.local/share/nvim/lazy/nvim-treesitter/parser/"},
-	}
-	if prof, ok := lock.Profiles[profile]; ok {
+	prof := lock.Profiles[profile]
+	var specs []componentSpec
+
+	// Nvim — gated on IncludeNvim (nil = unset = true).
+	if prof.NvimEnabled() {
+		specs = append(specs,
+			componentSpec{id: "nvim-binary", containerPath: "/opt/nvim/", installPath: "~/.local/share/nvim-dist/", binSymlink: "~/.local/bin/nvim"},
+			componentSpec{id: "treesitter/parsers", containerPath: "/root/.local/share/nvim/lazy/nvim-treesitter/parser/", installPath: "~/.local/share/nvim/lazy/nvim-treesitter/parser/"},
+		)
 		for _, plugin := range prof.Plugins {
 			specs = append(specs, componentSpec{
 				id:            "lazy/" + plugin,
@@ -39,6 +48,38 @@ func buildComponentSpecs(track BuildTrack, lock *config.LockFile, profile string
 			})
 		}
 	}
+
+	// Shell — framework dir + dotfiles, always from local filesystem.
+	if sp := prof.Shell; sp != nil {
+		if sp.Framework != "" && sp.FrameworkPath != "" {
+			fp := config.ExpandHome(sp.FrameworkPath)
+			specs = append(specs, componentSpec{
+				id:          "shell/framework",
+				installPath: sp.FrameworkPath + "/",
+				localPath:   fp,
+			})
+		}
+		if sp.RCPath != "" {
+			rc := config.ExpandHome(sp.RCPath)
+			specs = append(specs, componentSpec{
+				id:          "shell/rc",
+				installPath: sp.RCPath,
+				localPath:   rc,
+				preserve:    true,
+			})
+		}
+		if sp.ThemeConfigPath != "" {
+			tc := config.ExpandHome(sp.ThemeConfigPath)
+			specs = append(specs, componentSpec{
+				id:          "shell/theme-config",
+				installPath: sp.ThemeConfigPath,
+				localPath:   tc,
+				preserve:    true,
+			})
+		}
+	}
+
+	// Language runtimes.
 	for _, rl := range langs {
 		if rl.Runtime == nil {
 			continue
@@ -59,6 +100,8 @@ func buildComponentSpecs(track BuildTrack, lock *config.LockFile, profile string
 			})
 		}
 	}
+
+	// CLI tools.
 	for _, name := range flattenCLI(lock, profile) {
 		specs = append(specs, componentSpec{
 			id:            "cli/" + name,
@@ -81,26 +124,33 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 	for _, spec := range buildComponentSpecs(track, lock, profile, langs) {
 		tmpDir := fmt.Sprintf("/tmp/ferry-extract-%s-%s", containerID[:8], sanitizeID(spec.id))
 
-		// Single-file paths (no trailing slash): create tmpDir so docker cp places
-		// the file inside it rather than renaming it.
-		isSingleFile := !strings.HasSuffix(spec.containerPath, "/")
-		if isSingleFile {
-			os.MkdirAll(tmpDir, 0755)
-		}
-
-		cpDest := tmpDir
-		if isSingleFile {
-			cpDest = tmpDir + "/"
-		}
-		cpCmd := exec.Command("docker", "cp", containerID+":"+spec.containerPath, cpDest)
-		if out, err := cpCmd.CombinedOutput(); err != nil {
-			fmt.Fprintf(os.Stderr, "warning: skipping component %s: docker cp failed: %s\n", spec.id, strings.TrimSpace(string(out)))
-			os.RemoveAll(tmpDir)
-			continue
+		if spec.localPath != "" {
+			// Copy from local filesystem (shell dotfiles/framework, not from container).
+			if err := copyLocalToTmp(spec.localPath, tmpDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: skipping component %s: local copy failed: %v\n", spec.id, err)
+				os.RemoveAll(tmpDir)
+				continue
+			}
+		} else {
+			// Copy from running container.
+			isSingleFile := !strings.HasSuffix(spec.containerPath, "/")
+			if isSingleFile {
+				os.MkdirAll(tmpDir, 0755)
+			}
+			cpDest := tmpDir
+			if isSingleFile {
+				cpDest = tmpDir + "/"
+			}
+			cpCmd := exec.Command("docker", "cp", containerID+":"+spec.containerPath, cpDest)
+			if out, err := cpCmd.CombinedOutput(); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: skipping component %s: docker cp failed: %s\n", spec.id, strings.TrimSpace(string(out)))
+				os.RemoveAll(tmpDir)
+				continue
+			}
 		}
 
 		compressed, err := store.CompressDir(tmpDir, lock.Bundle.Exclude)
-		os.RemoveAll(tmpDir) // clean up immediately — don't accumulate large extract dirs
+		os.RemoveAll(tmpDir)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "warning: skipping component %s: compress failed: %v\n", spec.id, err)
 			continue
@@ -119,6 +169,7 @@ func ExtractComponents(containerID string, track BuildTrack, lock *config.LockFi
 			InstallPath:    spec.installPath,
 			BinSymlink:     spec.binSymlink,
 			ArchSpecific:   true,
+			Preserve:       spec.preserve,
 		})
 	}
 	return components, nil
@@ -136,6 +187,15 @@ func CreateContainer(imageID string) (string, error) {
 // RemoveContainer removes a container by ID.
 func RemoveContainer(containerID string) {
 	exec.Command("docker", "rm", containerID).Run()
+}
+
+// copyLocalToTmp copies a local file or directory into tmpDir.
+func copyLocalToTmp(src, tmpDir string) error {
+	if err := os.MkdirAll(tmpDir, 0755); err != nil {
+		return err
+	}
+	dst := filepath.Join(tmpDir, filepath.Base(src))
+	return cp.Copy(src, dst)
 }
 
 func sanitizeID(id string) string {
