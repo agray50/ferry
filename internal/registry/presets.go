@@ -19,9 +19,8 @@ func Presets() []Preset {
 			Description: "Go · Python · Rust (LSP only)",
 			EstimatedMB: 380,
 			Profile: config.ProfileConfig{
-				Description:  "backend development",
-				IncludeShell: true,
-				CLI:          []string{"rg", "fzf", "jq", "zoxide"},
+				Description: "backend development",
+				CLI:         []string{"rg", "fzf", "jq", "zoxide"},
 				Languages: []config.LanguageConfig{
 					{Name: "go", Tier: "full"},
 					{Name: "python", Tier: "full"},
@@ -34,9 +33,8 @@ func Presets() []Preset {
 			Description: "TypeScript · JavaScript",
 			EstimatedMB: 200,
 			Profile: config.ProfileConfig{
-				Description:  "frontend development",
-				IncludeShell: true,
-				CLI:          []string{"rg", "fzf", "jq"},
+				Description: "frontend development",
+				CLI:         []string{"rg", "fzf", "jq"},
 				Languages: []config.LanguageConfig{
 					{Name: "typescript", Tier: "full"},
 					{Name: "javascript", Tier: "full"},
@@ -48,9 +46,8 @@ func Presets() []Preset {
 			Description: "Go · TypeScript · Python",
 			EstimatedMB: 360,
 			Profile: config.ProfileConfig{
-				Description:  "full-stack development",
-				IncludeShell: true,
-				CLI:          []string{"rg", "fzf", "jq", "zoxide"},
+				Description: "full-stack development",
+				CLI:         []string{"rg", "fzf", "jq", "zoxide"},
 				Languages: []config.LanguageConfig{
 					{Name: "go", Tier: "full"},
 					{Name: "typescript", Tier: "full"},
@@ -63,9 +60,8 @@ func Presets() []Preset {
 			Description: "Python · Go for data pipelines",
 			EstimatedMB: 280,
 			Profile: config.ProfileConfig{
-				Description:  "data science / pipelines",
-				IncludeShell: true,
-				CLI:          []string{"rg", "jq", "yq"},
+				Description: "data science / pipelines",
+				CLI:         []string{"rg", "jq", "yq"},
 				Languages: []config.LanguageConfig{
 					{Name: "python", Tier: "full"},
 					{Name: "go", Tier: "full"},
@@ -77,9 +73,8 @@ func Presets() []Preset {
 			Description: "nvim + shell only, no languages",
 			EstimatedMB: 80,
 			Profile: config.ProfileConfig{
-				Description:  "minimal nvim environment",
-				IncludeShell: true,
-				CLI:          []string{"rg", "fzf"},
+				Description: "minimal nvim environment",
+				CLI:         []string{"rg", "fzf"},
 			},
 		},
 	}

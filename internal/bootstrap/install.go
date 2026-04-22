@@ -60,6 +60,14 @@ install_file() {
   chmod +x "$dest"
 }
 
+# Installs a single-file component only if the destination does not already exist.
+# Used for dotfiles so a user's remote customisations are not overwritten on update.
+install_file_preserve() {
+  local hash="$1" dest="$2"
+  [ -e "$dest" ] && return 0
+  install_file "$hash" "$dest"
+}
+
 `)
 
 	// Read one blank line from stdin so the script doesn't block if the caller
@@ -72,6 +80,8 @@ install_file() {
 		installPath := config.ExpandHome(c.InstallPath)
 		if strings.HasSuffix(c.InstallPath, "/") {
 			b.WriteString(fmt.Sprintf("install_component %q %q\n", c.Hash, installPath))
+		} else if c.Preserve {
+			b.WriteString(fmt.Sprintf("install_file_preserve %q %q\n", c.Hash, installPath))
 		} else {
 			b.WriteString(fmt.Sprintf("install_file %q %q\n", c.Hash, installPath))
 		}
@@ -106,7 +116,9 @@ cp "$FERRY_DIR/incoming/env.sh" "$FERRY_DIR/env.sh" 2>/dev/null || true
 	// ferry-lsp-guard.lua patches vim.lsp.start to silently skip servers whose
 	// executables aren't installed — requires no changes to the user's nvim config.
 	// ferry.lua exposes the bundled server list for optional user integration.
-	b.WriteString(generateNvimLuaSetup(langs))
+	if lock.Profiles[m.Profile].NvimEnabled() {
+		b.WriteString(generateNvimLuaSetup(langs))
+	}
 
 	b.WriteString(`# Set permissions.
 chmod +x "$BIN_DIR"/* 2>/dev/null || true

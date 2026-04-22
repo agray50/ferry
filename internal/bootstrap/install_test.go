@@ -455,3 +455,54 @@ func TestGenerateInstallScriptLSPDeduplication(t *testing.T) {
 		t.Errorf("typescript-language-server should appear exactly once in ferry.lua, got %d", count)
 	}
 }
+
+func TestGenerateInstallScriptPreservesDotfiles(t *testing.T) {
+	m := &store.Manifest{
+		Profile: "shell-only",
+		Components: []store.Component{
+			{ID: "shell/framework", InstallPath: "~/.oh-my-zsh/", Hash: "abc123"},
+			{ID: "shell/rc", InstallPath: "~/.zshrc", Hash: "def456", Preserve: true},
+			{ID: "shell/theme-config", InstallPath: "~/.p10k.zsh", Hash: "ghi789", Preserve: true},
+		},
+	}
+	script, err := GenerateInstallScript(m, &config.LockFile{}, nil)
+	if err != nil {
+		t.Fatalf("GenerateInstallScript: %v", err)
+	}
+	if !strings.Contains(script, "install_file_preserve") {
+		t.Error("install script should define install_file_preserve for dotfile non-destructive restore")
+	}
+	// framework dir uses normal install_component (atomic swap, always overwrites)
+	if !strings.Contains(script, `install_component "abc123"`) {
+		t.Error("shell framework should use install_component")
+	}
+	// rc and theme-config must use install_file_preserve
+	if !strings.Contains(script, `install_file_preserve "def456"`) {
+		t.Error("shell/rc should use install_file_preserve")
+	}
+	if !strings.Contains(script, `install_file_preserve "ghi789"`) {
+		t.Error("shell/theme-config should use install_file_preserve")
+	}
+}
+
+func TestGenerateInstallScriptNvimDisabled(t *testing.T) {
+	falseVal := false
+	lf := &config.LockFile{
+		Profiles: map[string]config.ProfileConfig{
+			"shell-only": {
+				IncludeNvim: &falseVal,
+			},
+		},
+	}
+	m := &store.Manifest{Profile: "shell-only"}
+	script, err := GenerateInstallScript(m, lf, nil)
+	if err != nil {
+		t.Fatalf("GenerateInstallScript: %v", err)
+	}
+	if strings.Contains(script, "plugin/ferry.lua") {
+		t.Error("nvim-disabled profile should not write plugin/ferry.lua")
+	}
+	if strings.Contains(script, "lua/ferry.lua") {
+		t.Error("nvim-disabled profile should not write lua/ferry.lua")
+	}
+}

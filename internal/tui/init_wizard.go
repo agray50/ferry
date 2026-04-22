@@ -187,7 +187,6 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 	// Run discovery once
 	fmt.Println("  scanning environment...")
 	nvim := discovery.DiscoverNvim()
-	shell := discovery.DiscoverShell()
 	cliTools := discovery.DiscoverCLITools()
 	allLangs := registryAllFunc()
 
@@ -246,9 +245,7 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 	}
 
 	// Step 4: Shell
-	if shell.Type != "" {
-		prof.IncludeShell = true
-	}
+	// (IncludeShell field removed — shell bundling is now configured via prof.Shell)
 
 	// Step 5: Size summary + confirm
 	fmt.Println(renderSizeSummary(profileName, prof))
