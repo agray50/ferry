@@ -19,9 +19,8 @@ func TestLanguageConfigRoundTrip(t *testing.T) {
 					{Name: "go", Tier: "full", RuntimeVersion: "1.22.5"},
 					{Name: "python", Tier: "lsp-only", LSP: "pylsp"},
 				},
-				Plugins:      []string{"nvim-lspconfig", "telescope.nvim"},
-				CLI:          []string{"rg", "fzf"},
-				IncludeShell: true,
+				Plugins: []string{"nvim-lspconfig", "telescope.nvim"},
+				CLI:     []string{"rg", "fzf"},
 			},
 		},
 	}
@@ -50,6 +49,96 @@ func TestLanguageConfigRoundTrip(t *testing.T) {
 	}
 	if len(prof.CLI) != 2 {
 		t.Errorf("CLI len = %d, want 2", len(prof.CLI))
+	}
+}
+
+func TestNvimEnabled(t *testing.T) {
+	trueVal := true
+	falseVal := false
+
+	// nil pointer = unset = enabled (backward compat)
+	p := ProfileConfig{}
+	if !p.NvimEnabled() {
+		t.Error("nil IncludeNvim should mean nvim is enabled")
+	}
+
+	// explicit true
+	p.IncludeNvim = &trueVal
+	if !p.NvimEnabled() {
+		t.Error("IncludeNvim=true should mean nvim is enabled")
+	}
+
+	// explicit false
+	p.IncludeNvim = &falseVal
+	if p.NvimEnabled() {
+		t.Error("IncludeNvim=false should mean nvim is disabled")
+	}
+}
+
+func TestShellProfileRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	orig, _ := os.Getwd()
+	os.Chdir(dir)
+	defer os.Chdir(orig)
+
+	trueVal := true
+	lf := &LockFile{
+		Profiles: map[string]ProfileConfig{
+			"shell-only": {
+				Description: "shell only profile",
+				IncludeNvim: &trueVal,
+				Shell: &ShellProfile{
+					Type:            "zsh",
+					Framework:       "oh-my-zsh",
+					FrameworkPath:   "~/.oh-my-zsh",
+					RCPath:          "~/.zshrc",
+					Theme:           "p10k",
+					ThemeConfigPath: "~/.p10k.zsh",
+				},
+			},
+		},
+	}
+
+	if err := WriteLockFile(lf); err != nil {
+		t.Fatalf("WriteLockFile: %v", err)
+	}
+	got, err := ReadLockFile()
+	if err != nil {
+		t.Fatalf("ReadLockFile: %v", err)
+	}
+	prof := got.Profiles["shell-only"]
+	if prof.Shell == nil {
+		t.Fatal("Shell should not be nil after round-trip")
+	}
+	if prof.Shell.Type != "zsh" {
+		t.Errorf("Shell.Type = %q, want zsh", prof.Shell.Type)
+	}
+	if prof.Shell.Framework != "oh-my-zsh" {
+		t.Errorf("Shell.Framework = %q, want oh-my-zsh", prof.Shell.Framework)
+	}
+	if prof.Shell.FrameworkPath != "~/.oh-my-zsh" {
+		t.Errorf("Shell.FrameworkPath = %q, want ~/.oh-my-zsh", prof.Shell.FrameworkPath)
+	}
+	if prof.Shell.RCPath != "~/.zshrc" {
+		t.Errorf("Shell.RCPath = %q, want ~/.zshrc", prof.Shell.RCPath)
+	}
+	if prof.Shell.Theme != "p10k" {
+		t.Errorf("Shell.Theme = %q, want p10k", prof.Shell.Theme)
+	}
+	if prof.Shell.ThemeConfigPath != "~/.p10k.zsh" {
+		t.Errorf("Shell.ThemeConfigPath = %q, want ~/.p10k.zsh", prof.Shell.ThemeConfigPath)
+	}
+	if prof.IncludeNvim == nil || !*prof.IncludeNvim {
+		t.Error("IncludeNvim should be true after round-trip")
+	}
+}
+
+func TestDefaultLockFileNvimEnabled(t *testing.T) {
+	lf := DefaultLockFile()
+	for name, prof := range lf.Profiles {
+		if !prof.NvimEnabled() {
+			t.Errorf("profile %q: DefaultLockFile should have nvim enabled", name)
+		}
 	}
 }
 

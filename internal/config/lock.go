@@ -12,7 +12,6 @@ import (
 // Languages and CLI tools are now per-profile; there are no global language settings.
 type LockFile struct {
 	Nvim     NvimConfig               `toml:"nvim"`
-	Shell    ShellConfig              `toml:"shell"`
 	Bundle   BundleConfig             `toml:"bundle"`
 	Profiles map[string]ProfileConfig `toml:"profiles"`
 }
@@ -31,26 +30,34 @@ type LanguageConfig struct {
 }
 
 // ProfileConfig describes a complete, independently deployable environment.
-// Every field is explicit — no IncludeAll flags.
 type ProfileConfig struct {
-	Description  string           `toml:"description"`
-	Languages    []LanguageConfig `toml:"languages"`
-	Plugins      []string         `toml:"plugins"`
-	CLI          []string         `toml:"cli"`
-	IncludeShell bool             `toml:"include_shell"`
+	Description string           `toml:"description"`
+	Languages   []LanguageConfig `toml:"languages"`
+	Plugins     []string         `toml:"plugins"`
+	CLI         []string         `toml:"cli"`
+	IncludeNvim *bool            `toml:"include_nvim,omitempty"`
+	Shell       *ShellProfile    `toml:"shell,omitempty"`
+}
+
+// NvimEnabled reports whether nvim should be bundled for this profile.
+// A nil pointer (field absent from ferry.lock) means true for backward compatibility.
+func (p ProfileConfig) NvimEnabled() bool {
+	return p.IncludeNvim == nil || *p.IncludeNvim
+}
+
+// ShellProfile describes the zsh setup to bundle for a profile.
+// nil means no shell bundling.
+type ShellProfile struct {
+	Type            string `toml:"type"`                        // always "zsh"
+	Framework       string `toml:"framework,omitempty"`         // "oh-my-zsh" | "zinit" | "zplug" | ""
+	FrameworkPath   string `toml:"framework_path,omitempty"`
+	RCPath          string `toml:"rc_path,omitempty"`
+	Theme           string `toml:"theme,omitempty"`             // "p10k" | "starship" | "pure" | ""
+	ThemeConfigPath string `toml:"theme_config_path,omitempty"`
 }
 
 type NvimConfig struct {
 	Version string `toml:"version"`
-}
-
-type ShellConfig struct {
-	Type              string `toml:"type"`
-	Config            string `toml:"config"`
-	Theme             string `toml:"theme"`
-	ThemeConfig       string `toml:"theme_config"`
-	PluginManager     string `toml:"plugin_manager"`
-	PluginManagerPath string `toml:"plugin_manager_path"`
 }
 
 type BundleConfig struct {
@@ -113,20 +120,22 @@ func DefaultLockFile() *LockFile {
 		},
 		Profiles: map[string]ProfileConfig{
 			"default": {
-				Description:  "full dev environment",
-				Languages:    []LanguageConfig{},
-				IncludeShell: true,
-				CLI:          []string{"rg", "fzf", "zoxide", "jq"},
+				Description: "full dev environment",
+				Languages:   []LanguageConfig{},
+				IncludeNvim: boolPtr(true),
+				CLI:         []string{"rg", "fzf", "zoxide", "jq"},
 			},
 			"minimal": {
-				Description:  "nvim + shell only",
-				IncludeShell: true,
+				Description: "nvim + shell only",
+				IncludeNvim: boolPtr(true),
 			},
 			"server": {
-				Description:  "shell and CLI tools, lightweight nvim",
-				IncludeShell: true,
-				CLI:          []string{"rg", "fzf", "jq"},
+				Description: "shell and CLI tools, lightweight nvim",
+				IncludeNvim: boolPtr(true),
+				CLI:         []string{"rg", "fzf", "jq"},
 			},
 		},
 	}
 }
+
+func boolPtr(b bool) *bool { return &b }
