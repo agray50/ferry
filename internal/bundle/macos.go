@@ -23,13 +23,16 @@ func buildMacOSTrack(track BuildTrack, opts BuildOptions, langs []registry.Resol
 
 	var components []store.Component
 
-	// 1. Download neovim binary for macOS.
-	nvimComps, err := buildNvimMacOS(track, opts.Lock, s)
-	if err != nil {
-		r.Error = fmt.Errorf("nvim macOS: %w", err)
-		return r
+	// 1. Download neovim binary for macOS (only when nvim is enabled for this profile).
+	prof := opts.Lock.Profiles[opts.Profile]
+	if prof.NvimEnabled() {
+		nvimComps, err := buildNvimMacOS(track, opts.Lock, s)
+		if err != nil {
+			r.Error = fmt.Errorf("nvim macOS: %w", err)
+			return r
+		}
+		components = append(components, nvimComps...)
 	}
-	components = append(components, nvimComps...)
 
 	// 2. Download language runtimes.
 	for _, rl := range langs {
@@ -104,7 +107,69 @@ func buildMacOSTrack(track BuildTrack, opts BuildOptions, langs []registry.Resol
 		}
 	}
 
-	// 5. Write manifest.
+	// 5. Shell components — copied from local filesystem.
+	if sp := prof.Shell; sp != nil {
+		type shellSpec struct {
+			id          string
+			localPath   string
+			installPath string
+			preserve    bool
+		}
+		var shellSpecs []shellSpec
+		if sp.Framework != "" && sp.FrameworkPath != "" {
+			shellSpecs = append(shellSpecs, shellSpec{
+				id:          "shell/framework",
+				localPath:   config.ExpandHome(sp.FrameworkPath),
+				installPath: sp.FrameworkPath + "/",
+			})
+		}
+		if sp.RCPath != "" {
+			shellSpecs = append(shellSpecs, shellSpec{
+				id:          "shell/rc",
+				localPath:   config.ExpandHome(sp.RCPath),
+				installPath: sp.RCPath,
+				preserve:    true,
+			})
+		}
+		if sp.ThemeConfigPath != "" {
+			shellSpecs = append(shellSpecs, shellSpec{
+				id:          "shell/theme-config",
+				localPath:   config.ExpandHome(sp.ThemeConfigPath),
+				installPath: sp.ThemeConfigPath,
+				preserve:    true,
+			})
+		}
+
+		for _, ss := range shellSpecs {
+			tmpDir := fmt.Sprintf("/tmp/ferry-shell-%s-%s", track.Arch, sanitizeID(ss.id))
+			if err := copyLocalToTmp(ss.localPath, tmpDir); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: skipping shell component %s: %v\n", ss.id, err)
+				os.RemoveAll(tmpDir)
+				continue
+			}
+			compressed, err := store.CompressDir(tmpDir, opts.Lock.Bundle.Exclude)
+			os.RemoveAll(tmpDir)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "warning: skipping shell component %s: compress failed: %v\n", ss.id, err)
+				continue
+			}
+			hash := store.HashBytes(compressed)
+			if err := s.Put(hash, compressed); err != nil {
+				r.Error = fmt.Errorf("storing shell component %s: %w", ss.id, err)
+				return r
+			}
+			components = append(components, store.Component{
+				ID:             ss.id,
+				Hash:           hash,
+				SizeCompressed: int64(len(compressed)),
+				InstallPath:    ss.installPath,
+				ArchSpecific:   false,
+				Preserve:       ss.preserve,
+			})
+		}
+	}
+
+	// 6. Write manifest.
 	m := &store.Manifest{
 		Profile:      opts.Profile,
 		Arch:         track.Arch,
