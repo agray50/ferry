@@ -102,3 +102,43 @@ func TestGenerateDockerfileErrorsForDarwinTrack(t *testing.T) {
 		t.Error("GenerateDockerfile should return error for darwin track")
 	}
 }
+
+func TestGenerateDockerfileNvimDisabled(t *testing.T) {
+	falseVal := false
+	track := BuildTracks[0] // linux/x86_64
+	lf := &config.LockFile{
+		Profiles: map[string]config.ProfileConfig{
+			"shell-only": {IncludeNvim: &falseVal},
+		},
+	}
+	df, err := GenerateDockerfile(track, lf, "shell-only", nil, nil)
+	if err != nil {
+		t.Fatalf("GenerateDockerfile: %v", err)
+	}
+	if strings.Contains(df, "neovim") || strings.Contains(df, "nvim") {
+		t.Error("Dockerfile for nvim-disabled profile should not contain nvim")
+	}
+	if strings.Contains(df, "Lazy!") {
+		t.Error("Dockerfile for nvim-disabled profile should not contain lazy.nvim bootstrap")
+	}
+	if strings.Contains(df, "TSInstall") {
+		t.Error("Dockerfile for nvim-disabled profile should not contain TSInstall")
+	}
+}
+
+func TestGenerateDockerfileNvimEnabled(t *testing.T) {
+	trueVal := true
+	track := BuildTracks[0]
+	lf := &config.LockFile{
+		Profiles: map[string]config.ProfileConfig{
+			"default": {IncludeNvim: &trueVal},
+		},
+	}
+	df, err := GenerateDockerfile(track, lf, "default", nil, nil)
+	if err != nil {
+		t.Fatalf("GenerateDockerfile: %v", err)
+	}
+	if !strings.Contains(df, "nvim") {
+		t.Error("nvim-enabled Dockerfile should contain nvim")
+	}
+}

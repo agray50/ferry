@@ -47,43 +47,47 @@ func GenerateDockerfile(track BuildTrack, lock *config.LockFile, profile string,
 	b.WriteString("    libsqlite3-dev liblzma-dev libncurses-dev tk-dev \\\n")
 	b.WriteString("    && rm -rf /var/lib/apt/lists/*\n\n")
 
-	// Neovim — release asset naming: nvim-linux-{arch}.tar.gz (v0.10.4+)
-	nvimVersion := lock.Nvim.Version
-	if nvimVersion == "" {
-		nvimVersion = "0.10.4"
-	}
-	nvimArch := "x86_64"
-	if track.Arch == "arm64" {
-		nvimArch = "arm64"
-	}
-	tarball := fmt.Sprintf("nvim-linux-%s.tar.gz", nvimArch)
-	b.WriteString("# neovim\n")
-	b.WriteString(fmt.Sprintf("RUN curl -fsSL https://github.com/neovim/neovim/releases/download/v%s/%s -o /tmp/%s \\\n", nvimVersion, tarball, tarball))
-	b.WriteString(fmt.Sprintf("    && tar -xzf /tmp/%s -C /opt \\\n", tarball))
-	b.WriteString(fmt.Sprintf("    && mv /opt/nvim-linux-%s /opt/nvim \\\n", nvimArch))
-	b.WriteString("    && ln -s /opt/nvim/bin/nvim /usr/local/bin/nvim \\\n")
-	b.WriteString(fmt.Sprintf("    && rm /tmp/%s\n\n", tarball))
+	prof := lock.Profiles[profile]
 
-	b.WriteString("# nvim config\n")
-	b.WriteString("COPY nvim-config /root/.config/nvim\n\n")
+	if prof.NvimEnabled() {
+		// Neovim — release asset naming: nvim-linux-{arch}.tar.gz (v0.10.4+)
+		nvimVersion := lock.Nvim.Version
+		if nvimVersion == "" {
+			nvimVersion = "0.10.4"
+		}
+		nvimArch := "x86_64"
+		if track.Arch == "arm64" {
+			nvimArch = "arm64"
+		}
+		tarball := fmt.Sprintf("nvim-linux-%s.tar.gz", nvimArch)
+		b.WriteString("# neovim\n")
+		b.WriteString(fmt.Sprintf("RUN curl -fsSL https://github.com/neovim/neovim/releases/download/v%s/%s -o /tmp/%s \\\n", nvimVersion, tarball, tarball))
+		b.WriteString(fmt.Sprintf("    && tar -xzf /tmp/%s -C /opt \\\n", tarball))
+		b.WriteString(fmt.Sprintf("    && mv /opt/nvim-linux-%s /opt/nvim \\\n", nvimArch))
+		b.WriteString("    && ln -s /opt/nvim/bin/nvim /usr/local/bin/nvim \\\n")
+		b.WriteString(fmt.Sprintf("    && rm /tmp/%s\n\n", tarball))
 
-	b.WriteString("# bootstrap lazy.nvim plugins\n")
-	b.WriteString("RUN nvim --headless \"+Lazy! sync\" +qa || true\n\n")
+		b.WriteString("# nvim config\n")
+		b.WriteString("COPY nvim-config /root/.config/nvim\n\n")
 
-	// Treesitter parsers (union across all languages)
-	var parsers []string
-	seen := map[string]bool{}
-	for _, rl := range langs {
-		for _, p := range rl.Language.TreesitterParsers {
-			if !seen[p] {
-				seen[p] = true
-				parsers = append(parsers, p)
+		b.WriteString("# bootstrap lazy.nvim plugins\n")
+		b.WriteString("RUN nvim --headless \"+Lazy! sync\" +qa || true\n\n")
+
+		// Treesitter parsers (union across all languages)
+		var parsers []string
+		seen := map[string]bool{}
+		for _, rl := range langs {
+			for _, p := range rl.Language.TreesitterParsers {
+				if !seen[p] {
+					seen[p] = true
+					parsers = append(parsers, p)
+				}
 			}
 		}
-	}
-	if len(parsers) > 0 {
-		b.WriteString("# treesitter parsers\n")
-		b.WriteString(fmt.Sprintf("RUN nvim --headless \"+TSInstall %s\" +qa || true\n\n", strings.Join(parsers, " ")))
+		if len(parsers) > 0 {
+			b.WriteString("# treesitter parsers\n")
+			b.WriteString(fmt.Sprintf("RUN nvim --headless \"+TSInstall %s\" +qa || true\n\n", strings.Join(parsers, " ")))
+		}
 	}
 
 	// Language runtimes — data-driven from registry BuildSteps.
