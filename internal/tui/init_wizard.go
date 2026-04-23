@@ -12,6 +12,8 @@ import (
 	"github.com/anthropics/ferry/internal/registry"
 )
 
+func boolPtr(b bool) *bool { return &b }
+
 // registryAllFunc is a variable so tests can inject a stub registry.
 var registryAllFunc = func() []registry.Language { return registry.All() }
 
@@ -187,6 +189,7 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 	// Run discovery once
 	fmt.Println("  scanning environment...")
 	nvim := discovery.DiscoverNvim()
+	shell := discovery.DiscoverShell()
 	cliTools := discovery.DiscoverCLITools()
 	allLangs := registryAllFunc()
 
@@ -202,23 +205,31 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 		prof.Languages = cfgs
 	}
 
-	// Step 2: Neovim plugins
-	if nvim.Found {
-		items := pluginItems(nvim.Plugins, prof.Plugins)
-		m := NewMultiSelect("Step 2: Neovim plugins — select plugins to include", items)
-		p := tea.NewProgram(m)
-		final, err := p.Run()
+	// Step 2: Neovim
+	{
+		nvimConfirmed, err := ConfirmPrompt("Step 2: Include Neovim?")
 		if err != nil {
 			return nil, false, err
 		}
-		mm := final.(MultiSelectModel)
-		if mm.aborted {
-			return nil, true, nil
-		}
-		prof.Plugins = nil
-		for _, item := range mm.Items {
-			if item.Selected {
-				prof.Plugins = append(prof.Plugins, item.Value)
+		prof.IncludeNvim = boolPtr(nvimConfirmed)
+
+		if nvimConfirmed && nvim.Found {
+			items := pluginItems(nvim.Plugins, prof.Plugins)
+			m := NewMultiSelect("Step 2: Neovim plugins — select plugins to include", items)
+			p := tea.NewProgram(m)
+			final, err := p.Run()
+			if err != nil {
+				return nil, false, err
+			}
+			mm := final.(MultiSelectModel)
+			if mm.aborted {
+				return nil, true, nil
+			}
+			prof.Plugins = nil
+			for _, item := range mm.Items {
+				if item.Selected {
+					prof.Plugins = append(prof.Plugins, item.Value)
+				}
 			}
 		}
 	}
@@ -245,7 +256,62 @@ func RunProfileWizard(profileName string, existing *config.ProfileConfig) (*conf
 	}
 
 	// Step 4: Shell
-	// (IncludeShell field removed — shell bundling is now configured via prof.Shell)
+	{
+		if shell.Type != "" {
+			var items []Item
+			if shell.PluginManager != "" && shell.PluginManagerPath != "" {
+				items = append(items, Item{
+					Label:    fmt.Sprintf("Bundle shell framework (%s)", shell.PluginManagerPath),
+					Value:    "framework",
+					Selected: true,
+				})
+			}
+			if shell.ConfigPath != "" {
+				items = append(items, Item{
+					Label:    fmt.Sprintf("Bundle %s", shell.ConfigPath),
+					Value:    "rc",
+					Selected: true,
+				})
+			}
+			if shell.ThemeConfigPath != "" {
+				items = append(items, Item{
+					Label:    fmt.Sprintf("Bundle theme config (%s)", shell.ThemeConfigPath),
+					Value:    "theme",
+					Selected: true,
+				})
+			}
+
+			if len(items) > 0 {
+				fmt.Printf("\n  detected: %s", shell.Type)
+				if shell.PluginManager != "" {
+					fmt.Printf("  │  %s", shell.PluginManager)
+				}
+				if shell.ThemeDetected != "" {
+					fmt.Printf("  │  %s", shell.ThemeDetected)
+				}
+				fmt.Println()
+
+				m := NewMultiSelect("Step 4: Shell — select components to bundle", items)
+				p := tea.NewProgram(m)
+				final, err := p.Run()
+				if err != nil {
+					return nil, false, err
+				}
+				mm := final.(MultiSelectModel)
+				if mm.aborted {
+					return nil, true, nil
+				}
+
+				selected := make(map[int]bool)
+				for i, item := range mm.Items {
+					if item.Selected {
+						selected[i] = true
+					}
+				}
+				prof.Shell = shellDiscoveryToProfile(shell, selected)
+			}
+		}
+	}
 
 	// Step 5: Size summary + confirm
 	fmt.Println(renderSizeSummary(profileName, prof))
@@ -304,4 +370,39 @@ func cliItemsForProfile(tools []discovery.CLITool, existing []string) []Item {
 	return items
 }
 
+// shellDiscoveryToProfile converts discovery results to a ShellProfile,
+// filtered by which items the user selected (by index: 0=framework, 1=rc, 2=theme).
+func shellDiscoveryToProfile(d discovery.ShellDiscovery, selected map[int]bool) *config.ShellProfile {
+	if d.Type == "" {
+		return nil
+	}
+	sp := &config.ShellProfile{
+		Type: d.Type,
+	}
+	idx := 0
+	if d.PluginManager != "" && d.PluginManagerPath != "" {
+		if selected[idx] {
+			sp.Framework = d.PluginManager
+			sp.FrameworkPath = d.PluginManagerPath
+		}
+		idx++
+	}
+	if d.ConfigPath != "" {
+		if selected[idx] {
+			sp.RCPath = d.ConfigPath
+		}
+		idx++
+	}
+	if d.ThemeConfigPath != "" {
+		if selected[idx] {
+			sp.Theme = d.ThemeDetected
+			sp.ThemeConfigPath = d.ThemeConfigPath
+		}
+	}
+	// If nothing was selected, return nil (user opted out of shell bundling entirely).
+	if sp.Framework == "" && sp.RCPath == "" && sp.ThemeConfigPath == "" {
+		return nil
+	}
+	return sp
+}
 
